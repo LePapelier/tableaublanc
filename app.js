@@ -619,7 +619,7 @@ function removeObjectLocal(id) {
 }
 
 function applyOp(op, record = true) {
-  if (!iCanWrite()) { flash('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
+  if (!iCanWrite()) { warn('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
   switch (op.t) {
     case 'add':
       for (const obj of op.objs) {
@@ -1149,13 +1149,13 @@ async function insertImageFile(file, wx, wy) {
     bmp.close?.();
     flash('Image insérée');
   } catch (err) {
-    flash('Échec : ' + err.message);
+    warn('Échec : ' + err.message);
   }
 }
 
 // Aiguillage PDF / image pour les fichiers déposés, choisis ou collés.
 function insertFiles(fileList, wx, wy) {
-  if (!iCanWrite()) { flash('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
+  if (!iCanWrite()) { warn('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
   let offset = 0;
   for (const file of fileList) {
     if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) insertPdfFile(file, wx + offset, wy);
@@ -1183,11 +1183,10 @@ async function insertPdfFile(file, wx, wy) {
       y += h + 24;
     }
     applyOp({ t: 'add', objs });
-    setHint(`${doc.numPages} page(s) insérée(s)`);
-    setTimeout(() => setHint(''), 2500);
+    setHint('');
   } catch (err) {
-    setHint('Échec : ' + err.message);
-    setTimeout(() => setHint(''), 4000);
+    setHint('');
+    warn('Échec : ' + err.message);
   }
 }
 
@@ -1249,7 +1248,7 @@ function openEditor(wx, wy, obj) {
   editor.hidden = false;
   editor.focus();
   if (obj) requestRender();
-  setHint('Entrée : valider · Maj+Entrée : nouvelle ligne · Échap : annuler · $x^2$ pour du LaTeX');
+
 }
 
 function closeEditor(commit) {
@@ -1543,7 +1542,7 @@ canvas.addEventListener('pointerdown', (ev) => {
   }
 
   if ((tool === 'pen' || tool === 'marker' || tool === 'eraser' || tool === 'text') && !iCanWrite()) {
-    flash('Lecture seule : le leader ne vous a pas autorisé à écrire');
+    warn('Lecture seule : le leader ne vous a pas autorisé à écrire');
     return;
   }
   if (tool === 'pen' || tool === 'marker') {
@@ -1889,7 +1888,7 @@ function applyAccess() {
   document.querySelector('.tool.file')?.classList.toggle('disabled', !can);
   if (!can && WRITE_TOOLS.includes(state.tool)) setTool('select');
   if (lastWriteState !== null && lastWriteState !== can) {
-    flash(can ? 'Vous pouvez de nouveau écrire sur le tableau' : 'Le leader a passé le tableau en lecture seule pour vous', 5000);
+    if (!can) warn('Le leader a passé le tableau en lecture seule pour vous', 5000);
   }
   lastWriteState = can;
   renderUsers();
@@ -2054,7 +2053,7 @@ function loadMhchem() {
 
 // Applique un préambule : renvoie { error, unsupported }.
 function applyPreamble(text, { broadcast = true, save = true } = {}) {
-  if (broadcast && !iCanWrite()) { flash('Lecture seule : seuls les participants autorisés modifient le préambule'); return { error: null, unsupported: [] }; }
+  if (broadcast && !iCanWrite()) { warn('Lecture seule : seuls les participants autorisés modifient le préambule'); return { error: null, unsupported: [] }; }
   state.preamble = text;
   const { body, packages } = normalizePreamble(text);
   const unsupported = [];
@@ -2106,12 +2105,12 @@ async function loadPreambleFile(file) {
     return;
   }
   const note = unsupported.length ? ' · non pris en charge : ' + unsupported.join(', ') : '';
-  flash(`Préambule « ${file.name} » appliqué${note}`, note ? 6000 : 3000);
+  if (note) warn(`Préambule « ${file.name} » : non pris en charge par KaTeX (ignoré) : ` + unsupported.join(', '), 6000);
 }
 $('#preamble-input').addEventListener('change', (ev) => {
   const file = ev.target.files[0];
   ev.target.value = '';
-  if (file) loadPreambleFile(file).catch((err) => flash('Fichier illisible : ' + err.message));
+  if (file) loadPreambleFile(file).catch((err) => warn('Fichier illisible : ' + err.message));
 });
 $('#preamble-load').addEventListener('click', () => {
   // Depuis la boîte : on remplit la zone de texte sans appliquer, l'utilisateur valide.
@@ -2139,7 +2138,7 @@ $('#preamble-apply').addEventListener('click', () => {
   if (unsupported.length) notes.push('Non pris en charge par KaTeX (ignoré) : ' + unsupported.join(', '));
   if (error) { setPreambleStatus(notes.join('\n'), true); return; }
   preambleDialog.close();
-  flash(notes.length ? notes.join(' · ') : 'Préambule appliqué', notes.length ? 6000 : 2500);
+  if (notes.length) warn(notes.join(' · '), 6000);
 });
 preambleDialog.addEventListener('keydown', (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') $('#preamble-apply').click();
@@ -2149,10 +2148,14 @@ preambleDialog.addEventListener('keydown', (ev) => {
 // ---------------------------------------------------------------------------
 // Enregistrer / ouvrir une session, exporter en PDF
 // ---------------------------------------------------------------------------
-function flash(text, ms = 3500) {
+// Messages : seuls les avertissements (erreur, action bloquée) s'affichent ; les confirmations restent silencieuses.
+function warn(text, ms = 4000) {
   setHint(text);
-  clearTimeout(flash.timer);
-  flash.timer = setTimeout(() => setHint(''), ms);
+  clearTimeout(warn.timer);
+  warn.timer = setTimeout(() => setHint(''), ms);
+}
+function flash(text) {
+  console.info(text);
 }
 
 function download(blob, name) {
@@ -2209,7 +2212,7 @@ async function openSession(file) {
     else if (data.preamble.trim() !== state.preamble.trim()) note = ' · préambule de la session ignoré (la salle en a déjà un)';
   }
   fitView();
-  flash(`Session ouverte : ${objs.length} éléments ajoutés${note}`, note ? 6000 : 3500);
+  if (note) warn('Préambule de la session ignoré : la salle en a déjà un', 6000);
 }
 
 // --- Rastérisation d'un texte (KaTeX) en PNG via SVG <foreignObject>, polices incluses.
@@ -2295,7 +2298,7 @@ function localMapper(obj) {
 }
 
 async function exportPdf() {
-  flash('Préparation du PDF…', 60000);
+  setHint('Préparation du PDF…');
   const { PDFDocument, rgb, LineCapStyle, degrees } = await import('./vendor/pdf-lib.esm.min.js');
   const out = await PDFDocument.create();
   const all = sortedObjects();
@@ -2412,7 +2415,7 @@ async function exportPdf() {
 
   const bytes = await out.save();
   download(new Blob([bytes], { type: 'application/pdf' }), `tableau-${ROOM}-${stamp()}.pdf`);
-  flash(`PDF exporté (${out.getPageCount()} page(s))`);
+  setHint('');
 }
 
 // ---------------------------------------------------------------------------
@@ -2427,8 +2430,8 @@ function setTool(tool) {
   $('#font-sizes').hidden = tool !== 'text';
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
   if (!isSelectTool) setSelection([]);
-  const coarse = matchMedia('(pointer: coarse)').matches;
-  setHint((coarse ? {
+  setHint('');
+  const unusedHints = (false ? {
     eraser: 'Glisser sur un trait pour l’effacer',
     text: 'Toucher pour écrire · $…$ = LaTeX',
     select: 'Toucher un trait ou encadrer une zone · glisser pour déplacer · coins : taille · poignée du haut : rotation',
@@ -2441,6 +2444,7 @@ function setTool(tool) {
     lasso: 'Entourer à main levée les traits à sélectionner · Maj : ajouter à la sélection',
     hand: 'Glisser pour déplacer la vue · Ctrl + molette : zoom',
   })[tool] || '');
+  void unusedHints;
 }
 
 function setHint(text) { hint.textContent = text; }
@@ -2522,7 +2526,7 @@ $('#btn-zoom-out').addEventListener('click', () => zoomAt(canvas.clientWidth / 2
 $('#btn-zoom-fit').addEventListener('click', fitView);
 $('#btn-clear').addEventListener('click', () => {
   if (!state.objects.size) return;
-  if (!iCanWrite()) { flash('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
+  if (!iCanWrite()) { warn('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
   if (!confirm('Effacer tout le tableau pour tout le monde ?')) return;
   const objs = [...state.objects.values()];
   for (const obj of objs) state.tombstones.set(obj.id, Date.now());
@@ -2576,16 +2580,16 @@ $('#btn-join-room').addEventListener('click', () => {
   let id = answer.trim();
   try { const u = new URL(id); id = u.searchParams.get('room') || ''; } catch (_) { /* pas un lien */ }
   id = id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
-  if (!id) { flash('Code de salle invalide'); return; }
-  if (id === ROOM) { flash('Vous êtes déjà dans cette salle'); return; }
+  if (!id) { warn('Code de salle invalide'); return; }
+  if (id === ROOM) { warn('Vous êtes déjà dans cette salle'); return; }
   goToRoom(id);
 });
-$('#btn-save').addEventListener('click', () => saveSession().catch((err) => flash('Échec : ' + err.message)));
-$('#btn-export-pdf').addEventListener('click', () => exportPdf().catch((err) => { console.error(err); flash('Échec de l’export : ' + err.message); }));
+$('#btn-save').addEventListener('click', () => saveSession().catch((err) => warn('Échec : ' + err.message)));
+$('#btn-export-pdf').addEventListener('click', () => exportPdf().catch((err) => { console.error(err); setHint(''); warn('Échec de l’export : ' + err.message); }));
 $('#session-input').addEventListener('change', (ev) => {
   const file = ev.target.files[0];
   ev.target.value = '';
-  if (file) openSession(file).catch((err) => flash('Fichier illisible : ' + err.message));
+  if (file) openSession(file).catch((err) => warn('Fichier illisible : ' + err.message));
 });
 window.addEventListener('pointerdown', (ev) => { if (!menu.hidden && !ev.target.closest('#menu, #btn-menu')) menu.hidden = true; });
 window.addEventListener('resize', () => updateSelectionBox());
