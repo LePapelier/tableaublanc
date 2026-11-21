@@ -7,6 +7,22 @@ import { connectMqtt } from './mqtt-lite.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
 
+// Cohérence des versions : page, script et styles doivent porter le même build (remplacé au déploiement).
+// Les caches des navigateurs expirent à des moments différents ; en cas de décalage, on recharge une fois
+// avec une adresse fraîche pour repartir d'un ensemble cohérent.
+const BUILD = 'dev';
+{
+  const url = new URL(location.href);
+  const retried = url.searchParams.has('_r');
+  if (retried) { url.searchParams.delete('_r'); history.replaceState(null, '', url); }
+  const htmlBuild = document.querySelector('meta[name="build"]')?.content;
+  const cssBuild = getComputedStyle(document.documentElement).getPropertyValue('--build').trim().replace(/"/g, '');
+  if (BUILD !== 'dev' && !retried && (htmlBuild !== BUILD || cssBuild !== BUILD)) {
+    url.searchParams.set('_r', Date.now().toString(36));
+    location.replace(url);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Utilitaires
 // ---------------------------------------------------------------------------
