@@ -262,14 +262,16 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 }
 #hint:empty { display: none; }
 
+#status.warn { background: #fee2e2; color: #991b1b; }
 #status {
   position: fixed;
   top: 64px;
   left: 50%;
   transform: translateX(-50%);
   padding: 6px 14px;
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
   border-radius: 999px;
   font-size: 13px;
   box-shadow: var(--shadow);

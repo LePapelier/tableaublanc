@@ -1,6 +1,9 @@
-// Tableau blanc collaboratif — logique front.
-import * as pdfjsLib from '/vendor/pdfjs/pdf.min.mjs';
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+// Tableau blanc collaboratif, 100 % statique : synchronisation pair-à-pair (WebRTC via Trystero),
+// LaTeX (KaTeX), PDF (pdf.js), sauvegarde locale (IndexedDB).
+import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
+import { joinRoom } from './vendor/trystero.js';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -12,17 +15,19 @@ const dist = (ax, ay, bx, by) => Math.hypot(bx - ax, by - ay);
 
 const PALETTE = ['#1f2937', '#3b82f6', '#dc2626', '#16a34a', '#f59e0b', '#9333ea', '#0891b2', '#ec4899'];
 const NAMES = ['Renard', 'Loutre', 'Hibou', 'Lynx', 'Panda', 'Koala', 'Dauphin', 'Colibri', 'Tortue', 'Hérisson'];
+const APP_ID = 'tableaublanc.whiteboard.v1';
 
+const PAGE_URL = new URL(location.href);
 const ROOM = (() => {
-  const url = new URL(location.href);
-  let room = url.searchParams.get('room');
+  let room = PAGE_URL.searchParams.get('room');
   if (!room || !/^[a-zA-Z0-9_-]{1,64}$/.test(room)) {
     room = Math.random().toString(36).slice(2, 8);
-    url.searchParams.set('room', room);
-    history.replaceState(null, '', url);
+    PAGE_URL.searchParams.set('room', room);
+    history.replaceState(null, '', PAGE_URL);
   }
   return room;
 })();
+const RELAYS = PAGE_URL.searchParams.get('relay'); // relais Nostr personnalisés, séparés par des virgules
 
 const me = {
   name: localStorage.getItem('wb-name') || NAMES[Math.floor(Math.random() * NAMES.length)],
@@ -37,8 +42,8 @@ localStorage.setItem('wb-color', me.color);
 // ---------------------------------------------------------------------------
 const state = {
   objects: new Map(), // id -> objet
-  drafts: new Map(), // user -> trait en cours (des autres)
-  users: [],
+  tombstones: new Map(), // id supprimé -> date (évite la résurrection lors des fusions)
+  drafts: new Map(), // peerId -> trait en cours (des autres)
   view: { tx: 0, ty: 0, scale: 1 },
   tool: 'pen',
   color: PALETTE[0],
@@ -48,6 +53,7 @@ const state = {
   undo: [],
   redo: [],
 };
+const files = new Map(); // fileId -> ArrayBuffer (PDF)
 
 const canvas = $('#board');
 const ctx = canvas.getContext('2d');
@@ -57,98 +63,201 @@ const selectionEl = $('#selection');
 const editor = $('#editor');
 const stage = $('#stage');
 const hint = $('#hint');
+const statusEl = $('#status');
 
 let dpr = window.devicePixelRatio || 1;
 
 // ---------------------------------------------------------------------------
-// Réseau
+// Sauvegarde locale (IndexedDB)
 // ---------------------------------------------------------------------------
-let ws = null;
-let reconnectDelay = 500;
+const db = new Promise((resolve) => {
+  const req = indexedDB.open('tableaublanc', 1);
+  req.onupgradeneeded = () => {
+    req.result.createObjectStore('rooms');
+    req.result.createObjectStore('files');
+  };
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => resolve(null);
+});
+
+async function idbGet(store, key) {
+  const d = await db;
+  if (!d) return undefined;
+  return new Promise((resolve) => {
+    const r = d.transaction(store).objectStore(store).get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => resolve(undefined);
+  });
+}
+async function idbPut(store, key, value) {
+  const d = await db;
+  if (!d) return;
+  d.transaction(store, 'readwrite').objectStore(store).put(value, key);
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    const cutoff = Date.now() - 7 * 86400e3;
+    for (const [id, t] of state.tombstones) if (t < cutoff) state.tombstones.delete(id);
+    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones] });
+  }, 800);
+}
+
+async function loadLocal() {
+  const saved = await idbGet('rooms', ROOM);
+  if (!saved) return;
+  for (const [id, t] of saved.tombstones || []) state.tombstones.set(id, t);
+  mergeObjects(saved.objects || [], null);
+}
+
+// ---------------------------------------------------------------------------
+// Réseau pair-à-pair
+// ---------------------------------------------------------------------------
+let room = null;
+let actions = null;
+let profile = null;
+const peerUsers = new Map(); // peerId -> userId
+
+function setStatus(text, kind = '') {
+  statusEl.hidden = !text;
+  statusEl.textContent = text || '';
+  statusEl.className = kind;
+}
+
+function peerIds() {
+  return room ? Object.keys(room.getPeers()) : [];
+}
 
 function connect() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const q = new URLSearchParams({ room: ROOM, name: me.name, color: me.color });
-  ws = new WebSocket(`${proto}//${location.host}/ws?${q}`);
-  $('#status').hidden = false;
-  $('#status').textContent = 'Connexion…';
+  const config = { appId: APP_ID, identity: 'none' };
+  if (RELAYS) config.relayConfig = { urls: RELAYS.split(',').map((s) => s.trim()).filter(Boolean) };
+  try {
+    room = joinRoom(config, ROOM);
+  } catch (err) {
+    setStatus('Mode hors ligne : ' + err.message, 'warn');
+    return;
+  }
+  setStatus('Recherche de participants…');
 
-  ws.onopen = () => {
-    reconnectDelay = 500;
-    $('#status').hidden = true;
+  actions = {
+    op: room.makeAction('op'),
+    draft: room.makeAction('draft'),
+    cursor: room.makeAction('cursor'),
+    sync: room.makeAction('sync', { kind: 'request' }),
+    file: room.makeAction('file', { kind: 'request' }),
   };
-  ws.onclose = () => {
-    $('#status').hidden = false;
-    $('#status').textContent = 'Déconnecté — reconnexion…';
-    setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 8000);
-  };
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    handleMessage(msg);
-  };
+  profile = room.makeUserState('profile', { name: me.name, color: me.color });
+
+  room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); });
+  room.ready.then(() => { if (!peerIds().length) setStatus('Personne d’autre pour l’instant : partagez le lien de la salle'); })
+    .catch((err) => setStatus('Relais injoignable : ' + err.message, 'warn'));
+  room.onError((err) => {
+    if (err.code === 'relay-failed') setStatus('Relais de mise en relation injoignable', 'warn');
+  });
+
+  actions.op.onMessage((msg, { peerId }) => handleOp(msg, peerId));
+  actions.draft.onMessage((msg, { peerId }) => {
+    if (msg && msg.points) state.drafts.set(peerId, msg);
+    else state.drafts.delete(peerId);
+    requestRender();
+  });
+  actions.cursor.onMessage((msg, { peerId }) => updateRemoteCursor(peerId, msg));
+  actions.sync.onRequest(() => ({ objects: [...state.objects.values()], tombstones: [...state.tombstones] }));
+  actions.file.onRequest((fileId) => {
+    const buf = files.get(fileId);
+    return buf ? new Uint8Array(buf) : null;
+  });
+
+  profile.onChange(() => renderUsers());
+  room.onPeerJoin(({ peerId, userId }) => {
+    peerUsers.set(peerId, userId);
+    setStatus('');
+    renderUsers();
+    syncFrom(peerId);
+  });
+  room.onPeerLeave(({ peerId }) => {
+    peerUsers.delete(peerId);
+    cursorsEl.querySelector(`[data-user="${peerId}"]`)?.remove();
+    state.drafts.delete(peerId);
+    if (!peerIds().length) setStatus('Personne d’autre pour l’instant : partagez le lien de la salle');
+    renderUsers();
+    requestRender();
+  });
 }
 
-function send(msg) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+function broadcast(kind, payload) {
+  if (!actions || !peerIds().length) return;
+  actions[kind].send(payload).catch(() => {});
 }
 
-function handleMessage(msg) {
+async function syncFrom(peerId) {
+  try {
+    const res = await actions.sync.request(null, { target: peerId, timeoutMs: 60000 });
+    if (!res) return;
+    for (const [id, t] of res.tombstones || []) {
+      if (!state.tombstones.has(id)) state.tombstones.set(id, t);
+      if (state.objects.has(id)) removeObjectLocal(id);
+    }
+    mergeObjects(res.objects || [], peerId);
+  } catch (_) {
+    /* pair parti entre-temps */
+  }
+}
+
+function mergeObjects(objs, fromPeer) {
+  let changed = false;
+  for (const obj of objs) {
+    if (!obj || typeof obj.id !== 'string' || state.tombstones.has(obj.id)) continue;
+    const cur = state.objects.get(obj.id);
+    if (!cur || (obj.rev || 0) > (cur.rev || 0)) {
+      state.objects.set(obj.id, obj);
+      if (obj.type === 'pdf') fileHints.set(obj.fileId, fromPeer);
+      changed = true;
+    }
+  }
+  if (changed) {
+    scheduleSave();
+    requestRender();
+  }
+}
+
+function handleOp(msg, peerId) {
+  if (!msg || typeof msg !== 'object') return;
   switch (msg.t) {
-    case 'init':
-      me.id = msg.you;
-      state.objects.clear();
-      overlay.replaceChildren();
-      for (const obj of msg.objects) state.objects.set(obj.id, obj);
-      state.users = msg.users;
-      renderUsers();
-      requestRender();
-      if (!initialFitDone) {
-        initialFitDone = true;
-        fitView();
-      }
-      break;
     case 'add':
-      state.objects.set(msg.obj.id, msg.obj);
-      requestRender();
+      if (msg.obj && typeof msg.obj.id === 'string') state.tombstones.delete(msg.obj.id); // ré-ajout explicite (rétablir)
+      mergeObjects([msg.obj], peerId);
       break;
     case 'update': {
       const obj = state.objects.get(msg.id);
-      if (obj) Object.assign(obj, msg.patch);
+      if (!obj || (msg.patch.rev || 0) <= (obj.rev || 0)) return;
+      Object.assign(obj, msg.patch);
       if (state.selected === msg.id) updateSelectionBox();
+      scheduleSave();
       requestRender();
       break;
     }
     case 'remove':
-      for (const id of msg.ids) removeObjectLocal(id);
+      for (const id of msg.ids || []) {
+        state.tombstones.set(id, Date.now());
+        removeObjectLocal(id);
+      }
+      scheduleSave();
       requestRender();
       break;
     case 'clear':
+      for (const id of state.objects.keys()) state.tombstones.set(id, Date.now());
       state.objects.clear();
       overlay.replaceChildren();
       selectObject(null);
-      requestRender();
-      break;
-    case 'draft':
-      if (msg.points) state.drafts.set(msg.user, msg);
-      else state.drafts.delete(msg.user);
-      requestRender();
-      break;
-    case 'cursor':
-      updateRemoteCursor(msg);
-      break;
-    case 'presence':
-      state.users = msg.users;
-      renderUsers();
-      break;
-    case 'leave':
-      cursorsEl.querySelector(`[data-user="${msg.user}"]`)?.remove();
-      state.drafts.delete(msg.user);
+      scheduleSave();
       requestRender();
       break;
   }
 }
-let initialFitDone = false;
 
 // ---------------------------------------------------------------------------
 // Opérations (locales + réseau + annulation)
@@ -163,24 +272,37 @@ function applyOp(op, record = true) {
   switch (op.t) {
     case 'add':
       for (const obj of op.objs) {
+        state.tombstones.delete(obj.id);
+        obj.rev = (obj.rev || 0) + 1;
         state.objects.set(obj.id, obj);
-        send({ t: 'add', obj });
+        broadcast('op', { t: 'add', obj });
       }
       break;
     case 'remove':
-      for (const obj of op.objs) removeObjectLocal(obj.id);
-      send({ t: 'remove', ids: op.objs.map((o) => o.id) });
+      for (const obj of op.objs) {
+        state.tombstones.set(obj.id, Date.now());
+        removeObjectLocal(obj.id);
+      }
+      broadcast('op', { t: 'remove', ids: op.objs.map((o) => o.id) });
       break;
     case 'update': {
       const obj = state.objects.get(op.id);
       if (!obj) return;
       Object.assign(obj, op.after);
-      send({ t: 'update', id: op.id, patch: op.after });
+      obj.rev = (obj.rev || 0) + 1;
+      broadcast('op', { t: 'update', id: op.id, patch: { ...op.after, rev: obj.rev } });
       break;
     }
   }
   if (record) recordOp(op);
+  scheduleSave();
   requestRender();
+}
+
+// Envoi d'une mise à jour transitoire (déplacement en cours) sans l'enregistrer dans l'historique.
+function pushLive(obj) {
+  obj.rev = (obj.rev || 0) + 1;
+  broadcast('op', { t: 'update', id: obj.id, patch: { ...snapshot(obj), rev: obj.rev } });
 }
 
 function recordOp(op) {
@@ -315,7 +437,7 @@ function segDist(px, py, ax, ay, bx, by) {
   return dist(px, py, ax + t * dx, ay + t * dy);
 }
 
-// Rendu du plus haut au plus bas : texte > traits > PDF.
+// Ordre de rendu : PDF en dessous, puis traits, puis textes.
 const Z = { pdf: 0, stroke: 1, text: 2 };
 function sortedObjects() {
   return [...state.objects.values()].sort((a, b) => (Z[a.type] - Z[b.type]) || ((a.ts || 0) - (b.ts || 0)));
@@ -364,7 +486,6 @@ function render() {
 
   ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * tx, dpr * ty);
 
-  // Zone visible en coordonnées monde (pour ne pas dessiner hors écran)
   const [vx0, vy0] = toWorld(0, 0);
   const [vx1, vy1] = toWorld(W, H);
 
@@ -383,8 +504,7 @@ function render() {
   for (const draft of state.drafts.values()) drawStroke(draft);
   if (currentStroke) drawStroke(currentStroke);
 
-  // Nettoyage des textes supprimés
-  for (const el of overlay.children) {
+  for (const el of [...overlay.children]) {
     if (!seen.has(el.dataset.id)) el.remove();
   }
 
@@ -404,9 +524,7 @@ function drawGrid(W, H) {
   ctx.fillStyle = '#d2d6dc';
   const x0 = ((tx % s) + s) % s, y0 = ((ty % s) + s) % s;
   for (let x = x0; x < W; x += s) {
-    for (let y = y0; y < H; y += s) {
-      ctx.fillRect(x - 1, y - 1, 2, 2);
-    }
+    for (let y = y0; y < H; y += s) ctx.fillRect(x - 1, y - 1, 2, 2);
   }
 }
 
@@ -440,53 +558,105 @@ function drawStroke(obj) {
   ctx.globalAlpha = 1;
 }
 
-// ----- PDF -----
-const pdfDocs = new Map(); // url -> Promise<PDFDocumentProxy>
-const pageCache = new Map(); // `${id}@${bucket}` -> canvas | 'pending'
+// ---------------------------------------------------------------------------
+// PDF : fichiers partagés entre pairs, rendu par page
+// ---------------------------------------------------------------------------
+const fileHints = new Map(); // fileId -> peerId qui l'a annoncé
+const filePending = new Map(); // fileId -> Promise
+const pdfDocs = new Map(); // fileId -> Promise<PDFDocumentProxy>
+const pageCache = new Map(); // `${id}@${bucket}` -> canvas | 'pending' | 'error'
 
-function getPdfDoc(url) {
-  if (!pdfDocs.has(url)) pdfDocs.set(url, pdfjsLib.getDocument({ url: new URL(url, location.href).href }).promise);
-  return pdfDocs.get(url);
+async function sha256(buf) {
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function storeFile(fileId, buf) {
+  files.set(fileId, buf);
+  idbPut('files', fileId, buf);
+  pdfDocs.delete(fileId);
+  for (const key of [...pageCache.keys()]) {
+    const obj = state.objects.get(key.split('@')[0]);
+    if (!obj || obj.fileId === fileId) pageCache.delete(key);
+  }
+  requestRender();
+}
+
+// Récupère un PDF manquant : d'abord en local (IndexedDB), sinon auprès des pairs.
+function ensureFile(fileId) {
+  if (files.has(fileId)) return Promise.resolve(true);
+  if (filePending.has(fileId)) return filePending.get(fileId);
+  const p = (async () => {
+    const local = await idbGet('files', fileId);
+    if (local) { storeFile(fileId, local); return true; }
+    const hinted = fileHints.get(fileId);
+    const candidates = [...new Set([hinted, ...peerIds()].filter(Boolean))];
+    for (const peerId of candidates) {
+      try {
+        const bytes = await actions.file.request(fileId, { target: peerId, timeoutMs: 120000 });
+        if (bytes && bytes.byteLength) {
+          const buf = bytes.buffer ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes;
+          if ((await sha256(buf)) === fileId) { storeFile(fileId, buf); return true; }
+        }
+      } catch (_) { /* pair suivant */ }
+    }
+    return false;
+  })().finally(() => filePending.delete(fileId));
+  filePending.set(fileId, p);
+  return p;
+}
+
+function getPdfDoc(fileId) {
+  if (!pdfDocs.has(fileId)) {
+    // pdf.js transfère le tampon au worker : on lui passe une copie.
+    const data = new Uint8Array(files.get(fileId)).slice();
+    pdfDocs.set(fileId, pdfjsLib.getDocument({ data }).promise);
+  }
+  return pdfDocs.get(fileId);
 }
 
 function drawPdf(obj) {
-  // Résolution adaptée au zoom (par paliers de puissance de 2), plafonnée.
-  const wanted = clamp(Math.pow(2, Math.ceil(Math.log2(state.view.scale * dpr))), 0.5, 4);
-  const key = `${obj.id}@${wanted}`;
-  let img = pageCache.get(key);
-  if (!img) {
-    pageCache.set(key, 'pending');
-    renderPdfPage(obj, wanted).then((c) => {
-      pageCache.set(key, c);
-      requestRender();
-    }).catch(() => pageCache.set(key, 'error'));
-  }
-  if (!img || img === 'pending' || img === 'error') {
-    // Repli : le meilleur rendu déjà disponible
-    for (const b of [4, 2, 1, 0.5]) {
-      const alt = pageCache.get(`${obj.id}@${b}`);
-      if (alt && alt !== 'pending' && alt !== 'error') { img = alt; break; }
-    }
-  }
   ctx.fillStyle = 'white';
   ctx.shadowColor = 'rgba(0,0,0,.15)';
   ctx.shadowBlur = 12 / state.view.scale;
   ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
+
+  let img = null;
+  if (files.has(obj.fileId)) {
+    const wanted = clamp(Math.pow(2, Math.ceil(Math.log2(state.view.scale * dpr))), 0.5, 4);
+    const key = `${obj.id}@${wanted}`;
+    img = pageCache.get(key);
+    if (!img) {
+      pageCache.set(key, 'pending');
+      renderPdfPage(obj, wanted).then((c) => { pageCache.set(key, c); requestRender(); })
+        .catch(() => pageCache.set(key, 'error'));
+    }
+    if (!img || img === 'pending' || img === 'error') {
+      for (const b of [4, 2, 1, 0.5]) {
+        const alt = pageCache.get(`${obj.id}@${b}`);
+        if (alt && alt !== 'pending' && alt !== 'error') { img = alt; break; }
+      }
+    }
+  } else {
+    ensureFile(obj.fileId).then((ok) => { if (!ok) pageCache.set(`${obj.id}@missing`, 'error'); });
+  }
+
   if (img && img !== 'pending' && img !== 'error') {
     ctx.drawImage(img, obj.x, obj.y, obj.w, obj.h);
   } else {
+    const missing = !files.has(obj.fileId) && pageCache.get(`${obj.id}@missing`) === 'error';
     ctx.fillStyle = '#9ca3af';
     ctx.font = `${Math.max(12, obj.w / 30)}px system-ui`;
     ctx.textAlign = 'center';
-    ctx.fillText(img === 'error' ? 'PDF indisponible' : 'Chargement…', obj.x + obj.w / 2, obj.y + obj.h / 2);
+    ctx.fillText(missing ? 'PDF indisponible (aucun participant ne l’a)' : img === 'error' ? 'PDF illisible' : 'Réception du PDF…', obj.x + obj.w / 2, obj.y + obj.h / 2);
     ctx.textAlign = 'start';
   }
 }
 
 async function renderPdfPage(obj, bucket) {
-  const doc = await getPdfDoc(obj.url);
+  const doc = await getPdfDoc(obj.fileId);
   const page = await doc.getPage(obj.page);
   const vp0 = page.getViewport({ scale: 1 });
   const targetW = Math.min(4096, obj.w * bucket);
@@ -499,12 +669,12 @@ async function renderPdfPage(obj, bucket) {
 }
 
 async function insertPdfFile(file, wx, wy) {
-  setHint('Envoi du PDF…');
+  setHint('Lecture du PDF…');
   try {
-    const res = await fetch('/upload', { method: 'POST', body: file, headers: { 'Content-Type': 'application/pdf' } });
-    if (!res.ok) throw new Error(await res.text());
-    const { url } = await res.json();
-    const doc = await getPdfDoc(url);
+    const buf = await file.arrayBuffer();
+    const fileId = await sha256(buf);
+    if (!files.has(fileId)) storeFile(fileId, buf);
+    const doc = await getPdfDoc(fileId);
     const pageW = 800;
     let y = wy;
     const objs = [];
@@ -512,8 +682,7 @@ async function insertPdfFile(file, wx, wy) {
       const page = await doc.getPage(i);
       const vp = page.getViewport({ scale: 1 });
       const h = (pageW * vp.height) / vp.width;
-      const obj = { id: uid(), type: 'pdf', url, page: i, x: wx, y, w: pageW, h, ts: Date.now() };
-      objs.push(obj);
+      objs.push({ id: uid(), type: 'pdf', fileId, page: i, x: wx, y, w: pageW, h, ts: Date.now() });
       y += h + 24;
     }
     applyOp({ t: 'add', objs });
@@ -525,9 +694,10 @@ async function insertPdfFile(file, wx, wy) {
   }
 }
 
-// ----- Texte / LaTeX -----
+// ---------------------------------------------------------------------------
+// Texte / LaTeX
+// ---------------------------------------------------------------------------
 function renderLatexHtml(text) {
-  // Découpe $$...$$ (bloc) et $...$ (en ligne) ; le reste est du texte brut.
   const parts = [];
   const re = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
   let last = 0, m;
@@ -563,7 +733,6 @@ function renderText(obj) {
     el.innerHTML = renderLatexHtml(obj.text || '');
     el.style.color = obj.color;
   }
-  // Rendu à 16px puis mise à l'échelle : KaTeX garde ses proportions.
   el.style.fontSize = '16px';
   el.style.transform = `translate(${obj.x}px, ${obj.y}px) scale(${obj.size / 16})`;
   el.classList.toggle('hidden', editing && editing.id === obj.id);
@@ -589,6 +758,7 @@ function closeEditor(commit) {
   if (!editing) return;
   const e = editing;
   editing = null;
+  editor.blur();
   editor.hidden = true;
   const text = editor.value.trim();
   if (commit) {
@@ -654,11 +824,12 @@ function snapshot(obj) {
 // Pointeur
 // ---------------------------------------------------------------------------
 let currentStroke = null;
-let drag = null; // { kind, ... }
-const pointers = new Map(); // pointerId -> {x,y}
+let drag = null;
+const pointers = new Map();
 let pinch = null;
 let spaceDown = false;
 let lastDraftSent = 0;
+let lastCursorSent = 0;
 
 function effectiveTool(ev) {
   if (spaceDown || ev.button === 1) return 'hand';
@@ -666,11 +837,10 @@ function effectiveTool(ev) {
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
-  if (editing) { closeEditor(true); }
+  if (editing) closeEditor(true);
   canvas.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
-  // Deux doigts : pincement = pan + zoom
   if (pointers.size === 2) {
     cancelCurrentStroke();
     drag = null;
@@ -719,17 +889,14 @@ canvas.addEventListener('pointerdown', (ev) => {
       const b = bbox(sel);
       const [hx, hy] = toScreen(b.x + b.w, b.y + b.h);
       if (dist(ev.clientX, ev.clientY, hx + 4, hy + 4) < 14) {
-        drag = { kind: 'resize', obj: sel, before: snapshot(sel), b0: { ...b }, sx: ev.clientX, sy: ev.clientY };
+        drag = { kind: 'resize', obj: sel, before: snapshot(sel), b0: { ...b } };
         return;
       }
     }
     const hit = hitTest(wx, wy);
     selectObject(hit ? hit.id : null);
-    if (hit) {
-      drag = { kind: 'move', obj: hit, before: snapshot(hit), lx: wx, ly: wy, moved: false };
-    } else {
-      drag = { kind: 'pan', sx: ev.clientX, sy: ev.clientY, tx: state.view.tx, ty: state.view.ty };
-    }
+    if (hit) drag = { kind: 'move', obj: hit, before: snapshot(hit), lx: wx, ly: wy, moved: false };
+    else drag = { kind: 'pan', sx: ev.clientX, sy: ev.clientY, tx: state.view.tx, ty: state.view.ty };
   }
 });
 
@@ -737,11 +904,10 @@ canvas.addEventListener('pointermove', (ev) => {
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
-  // Curseur partagé (limité)
   const now = performance.now();
   if (now - lastCursorSent > 50) {
     lastCursorSent = now;
-    send({ t: 'cursor', x: wx, y: wy });
+    broadcast('cursor', { x: wx, y: wy });
   }
 
   if (pinch && pointers.size === 2) {
@@ -755,10 +921,7 @@ canvas.addEventListener('pointermove', (ev) => {
     return;
   }
   if (!drag) {
-    if (state.tool === 'select') {
-      const hit = hitTest(wx, wy);
-      canvas.style.cursor = hit ? 'move' : 'default';
-    }
+    if (state.tool === 'select') canvas.style.cursor = hitTest(wx, wy) ? 'move' : 'default';
     return;
   }
 
@@ -775,7 +938,7 @@ canvas.addEventListener('pointermove', (ev) => {
       p.push(wx, wy);
       if (now - lastDraftSent > 60) {
         lastDraftSent = now;
-        send({ t: 'draft', ...currentStroke });
+        broadcast('draft', currentStroke);
       }
       requestRender();
       break;
@@ -789,7 +952,7 @@ canvas.addEventListener('pointermove', (ev) => {
       drag.moved = true;
       moveObject(drag.obj, dx, dy);
       drag.lx = wx; drag.ly = wy;
-      send({ t: 'update', id: drag.obj.id, patch: snapshot(drag.obj) });
+      pushLive(drag.obj);
       requestRender();
       break;
     }
@@ -798,13 +961,12 @@ canvas.addEventListener('pointermove', (ev) => {
       const f = Math.max(0.05, ((wx - b0.x) / b0.w + (wy - b0.y) / b0.h) / 2);
       if (obj.type === 'pdf') { obj.w = b0.w * f; obj.h = b0.h * f; }
       else obj.size = clamp(drag.before.size * f, 6, 400);
-      send({ t: 'update', id: obj.id, patch: snapshot(obj) });
+      pushLive(obj);
       requestRender();
       break;
     }
   }
 });
-let lastCursorSent = 0;
 
 function endPointer(ev) {
   pointers.delete(ev.pointerId);
@@ -825,22 +987,22 @@ function endPointer(ev) {
     case 'draw': {
       const s = currentStroke;
       currentStroke = null;
-      send({ t: 'draft', points: null });
+      broadcast('draft', { end: true });
       if (s) applyOp({ t: 'add', objs: [s] });
       break;
     }
     case 'erase':
-      if (d.removed.length) {
-        recordOp({ t: 'remove', objs: d.removed });
-      }
+      if (d.removed.length) recordOp({ t: 'remove', objs: d.removed });
       break;
     case 'move':
       if (d.moved) {
         recordOp({ t: 'update', id: d.obj.id, before: d.before, after: snapshot(d.obj) });
+        scheduleSave();
       }
       break;
     case 'resize':
       recordOp({ t: 'update', id: d.obj.id, before: d.before, after: snapshot(d.obj) });
+      scheduleSave();
       break;
   }
   requestRender();
@@ -851,22 +1013,21 @@ canvas.addEventListener('pointercancel', endPointer);
 function cancelCurrentStroke() {
   if (currentStroke) {
     currentStroke = null;
-    send({ t: 'draft', points: null });
+    broadcast('draft', { end: true });
     requestRender();
   }
 }
 
 function eraseAt(wx, wy, d) {
   const radius = Math.max(8, state.width * 2) / state.view.scale;
+  const hit = [];
   for (const obj of state.objects.values()) {
-    if (obj.type !== 'stroke') continue;
-    if (strokeHit(obj, wx, wy, radius)) {
-      d.removed.push(obj);
-      removeObjectLocal(obj.id);
-      send({ t: 'remove', ids: [obj.id] });
-    }
+    if (obj.type === 'stroke' && strokeHit(obj, wx, wy, radius)) hit.push(obj);
   }
-  requestRender();
+  if (hit.length) {
+    d.removed.push(...hit);
+    applyOp({ t: 'remove', objs: hit }, false);
+  }
 }
 
 canvas.addEventListener('dblclick', (ev) => {
@@ -916,20 +1077,26 @@ $('#pdf-input').addEventListener('change', (ev) => {
 // ---------------------------------------------------------------------------
 // Curseurs et participants
 // ---------------------------------------------------------------------------
-function updateRemoteCursor(msg) {
-  let el = cursorsEl.querySelector(`[data-user="${msg.user}"]`);
-  const user = state.users.find((u) => u.id === msg.user);
+function userOf(peerId) {
+  const userId = peerUsers.get(peerId);
+  const p = (profile && userId && profile.get(userId)) || {};
+  return { name: p.name || 'Anonyme', color: p.color || '#888' };
+}
+
+function updateRemoteCursor(peerId, msg) {
+  if (!msg || typeof msg.x !== 'number') return;
+  let el = cursorsEl.querySelector(`[data-user="${peerId}"]`);
   if (!el) {
     el = document.createElement('div');
     el.className = 'cursor';
-    el.dataset.user = msg.user;
+    el.dataset.user = peerId;
     el.innerHTML = `<svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-3 6z" stroke="white" stroke-width="1.5"/></svg><span></span>`;
     cursorsEl.appendChild(el);
   }
-  const color = user?.color || '#888';
-  el.querySelector('path').setAttribute('fill', color);
-  el.querySelector('span').textContent = user?.name || '';
-  el.querySelector('span').style.background = color;
+  const user = userOf(peerId);
+  el.querySelector('path').setAttribute('fill', user.color);
+  el.querySelector('span').textContent = user.name;
+  el.querySelector('span').style.background = user.color;
   el.dataset.x = msg.x;
   el.dataset.y = msg.y;
   el.style.transform = `translate(${msg.x}px, ${msg.y}px) scale(${1 / state.view.scale})`;
@@ -938,14 +1105,16 @@ function updateRemoteCursor(msg) {
 function renderUsers() {
   const box = $('#users');
   box.replaceChildren();
-  for (const u of state.users) {
+  const list = [{ name: me.name, color: me.color, self: true }, ...peerIds().map(userOf)];
+  for (const u of list) {
     const a = document.createElement('div');
     a.className = 'avatar';
     a.style.background = u.color;
     a.textContent = (u.name || '?')[0].toUpperCase();
-    a.title = u.name + (u.id === me.id ? ' (moi)' : '');
+    a.title = u.name + (u.self ? ' (moi)' : '');
     box.appendChild(a);
   }
+  box.title = list.length > 1 ? `${list.length} participants` : 'Participants';
   $('#btn-name').textContent = me.name;
 }
 
@@ -1016,11 +1185,13 @@ $('#btn-clear').addEventListener('click', () => {
   if (!state.objects.size) return;
   if (!confirm('Effacer tout le tableau pour tout le monde ?')) return;
   const objs = [...state.objects.values()];
+  for (const obj of objs) state.tombstones.set(obj.id, Date.now());
   state.objects.clear();
   overlay.replaceChildren();
   selectObject(null);
-  send({ t: 'clear' });
+  broadcast('op', { t: 'clear' });
   recordOp({ t: 'remove', objs });
+  scheduleSave();
   requestRender();
 });
 $('#btn-share').addEventListener('click', async () => {
@@ -1037,7 +1208,8 @@ $('#btn-name').addEventListener('click', () => {
   if (name && name.trim()) {
     me.name = name.trim().slice(0, 24);
     localStorage.setItem('wb-name', me.name);
-    ws?.close(); // la reconnexion renvoie le nouveau nom
+    profile?.set({ name: me.name, color: me.color });
+    renderUsers();
   }
 });
 $('#room-label').textContent = 'salle ' + ROOM;
@@ -1071,8 +1243,15 @@ window.addEventListener('keyup', (ev) => {
   if (ev.key === ' ') { spaceDown = false; if (!drag) setTool(state.tool); }
 });
 
+// ---------------------------------------------------------------------------
+// Démarrage
+// ---------------------------------------------------------------------------
 window.addEventListener('resize', resize);
 resize();
 setTool('pen');
 updateUndoButtons();
-connect();
+renderUsers();
+loadLocal().then(() => { fitView(); connect(); });
+
+// Accès à l'état pour le débogage et les tests.
+window.tableaublanc = { state, files, get room() { return room; } };

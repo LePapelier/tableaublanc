@@ -1,10 +1,11 @@
 {
   "name": "tableaublanc",
   "version": "1.0.0",
-  "description": "Tableau blanc collaboratif : dessin, LaTeX et annotation de PDF",
-  "main": "server.js",
+  "description": "Tableau blanc collaboratif pair-à-pair, 100 % statique : dessin, LaTeX et annotation de PDF",
   "scripts": {
-    "start": "node server.js"
+    "start": "npx --yes http-server . -p 3000 -c-1",
+    "vendor": "node scripts/vendor.js",
+    "relay": "node tools/relay.js"
   },
   "repository": {
     "type": "git",
@@ -15,12 +16,14 @@
     "url": "https://github.com/LePapelier/tableaublanc/issues"
   },
   "homepage": "https://github.com/LePapelier/tableaublanc#readme",
-  "dependencies": {
-    "katex": "^0.19.1",
-    "pdfjs-dist": "^6.5.438",
-    "ws": "^8.23.0"
-  },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "katex": "^0.19.1",
+    "pdfjs-dist": "^6.5.438",
+    "trystero": "^0.27.0",
+    "ws": "^8.23.0"
   }
 }
