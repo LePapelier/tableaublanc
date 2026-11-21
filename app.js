@@ -2684,9 +2684,6 @@ $('#btn-clear').addEventListener('click', () => {
 });
 $('#btn-share').addEventListener('click', async () => {
   const url = location.href;
-  if (navigator.share && matchMedia('(pointer: coarse)').matches) {
-    try { await navigator.share({ title: 'Tableau blanc', text: `Rejoignez la salle ${ROOM}`, url }); return; } catch (_) { /* annulé : on retombe sur la copie */ }
-  }
   try {
     await navigator.clipboard.writeText(url);
     $('#btn-share span').textContent = 'Lien copié';
