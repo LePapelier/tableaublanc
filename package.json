@@ -1,0 +1,26 @@
+{
+  "name": "tableaublanc",
+  "version": "1.0.0",
+  "description": "Tableau blanc collaboratif : dessin, LaTeX et annotation de PDF",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LePapelier/tableaublanc.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/LePapelier/tableaublanc/issues"
+  },
+  "homepage": "https://github.com/LePapelier/tableaublanc#readme",
+  "dependencies": {
+    "katex": "^0.19.1",
+    "pdfjs-dist": "^6.5.438",
+    "ws": "^8.23.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

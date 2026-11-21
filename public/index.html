@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Tableau blanc</title>
+  <link rel="stylesheet" href="/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b82f6'/%3E%3Cpath d='M8 22l10-10 2 2-10 10H8z' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="board"></canvas>
+    <div id="overlay"></div>
+    <div id="cursors"></div>
+    <div id="selection" hidden><div class="handle"></div></div>
+    <textarea id="editor" hidden spellcheck="false" placeholder="Texte… $x^2$ pour du LaTeX, $$…$$ pour un bloc"></textarea>
+  </div>
+
+  <header id="topbar">
+    <div class="group">
+      <strong class="brand">Tableau blanc</strong>
+      <span id="room-label" class="muted"></span>
+    </div>
+    <div class="group">
+      <button id="btn-undo" class="icon" title="Annuler (Ctrl+Z)">↶</button>
+      <button id="btn-redo" class="icon" title="Rétablir (Ctrl+Y)">↷</button>
+      <span class="sep"></span>
+      <button id="btn-zoom-out" class="icon" title="Zoom arrière">−</button>
+      <button id="btn-zoom-fit" class="text" title="Tout afficher">100 %</button>
+      <button id="btn-zoom-in" class="icon" title="Zoom avant">+</button>
+      <span class="sep"></span>
+      <button id="btn-clear" class="text danger" title="Effacer tout le tableau">Tout effacer</button>
+    </div>
+    <div class="group">
+      <div id="users" title="Participants"></div>
+      <button id="btn-name" class="text" title="Changer de nom">Moi</button>
+      <button id="btn-share" class="text primary" title="Copier le lien de la salle">Partager</button>
+    </div>
+  </header>
+
+  <nav id="toolbar">
+    <button class="tool" data-tool="select" title="Sélection (V)">
+      <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-3 6z"/></svg>
+    </button>
+    <button class="tool" data-tool="pen" title="Crayon (P)">
+      <svg viewBox="0 0 24 24"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 6l3 3"/></svg>
+    </button>
+    <button class="tool" data-tool="marker" title="Surligneur (H)">
+      <svg viewBox="0 0 24 24"><path d="M6 18h12"/><path d="M8 15l7-9 3 3-7 9H8z"/></svg>
+    </button>
+    <button class="tool" data-tool="eraser" title="Gomme (E)">
+      <svg viewBox="0 0 24 24"><path d="M7 20h10"/><path d="M4 15l8-8 5 5-6 6H7z"/></svg>
+    </button>
+    <button class="tool" data-tool="text" title="Texte et LaTeX (T)">
+      <svg viewBox="0 0 24 24"><path d="M5 6h14"/><path d="M12 6v13"/></svg>
+    </button>
+    <button class="tool" data-tool="hand" title="Déplacer la vue (Espace)">
+      <svg viewBox="0 0 24 24"><path d="M8 13V6a1.5 1.5 0 013 0v6"/><path d="M11 11V4.5a1.5 1.5 0 013 0V12"/><path d="M14 11.5V6a1.5 1.5 0 013 0v8c0 3-2 6-6 6-3 0-4.5-1.5-6-4l-2-3.5a1.5 1.5 0 012.5-1.5L8 13"/></svg>
+    </button>
+    <span class="sep"></span>
+    <label class="tool file" title="Insérer un PDF">
+      <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 14h6M9 17h6"/></svg>
+      <input id="pdf-input" type="file" accept="application/pdf" multiple hidden>
+    </label>
+
+    <div id="options">
+      <div id="colors"></div>
+      <input id="width" type="range" min="1" max="24" value="3" title="Épaisseur">
+      <input id="font-size" type="range" min="12" max="72" value="24" title="Taille du texte" hidden>
+    </div>
+  </nav>
+
+  <div id="hint" class="muted"></div>
+  <div id="status" hidden>Connexion…</div>
+
+  <script src="/vendor/katex/katex.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
