@@ -193,6 +193,7 @@ html, body {
 /* ----- Barres ----- */
 #topbar {
   position: fixed;
+  z-index: 6; /* ses menus passent au-dessus de la barre de sélection et de la barre d'outils */
   top: 12px;
   left: 12px;
   right: 12px;
