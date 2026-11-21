@@ -27,7 +27,7 @@ Conséquences à connaître :
 La pastille à gauche des avatars indique l'état : orange clignotant = connexion aux relais, bleu = prêt mais seul dans la salle, vert = au moins un autre participant connecté, rouge = relais injoignable (survolez-la pour le détail).
 
 - **Vérifiez que l'URL est identique** des deux côtés, paramètre `room` compris : c'est lui qui désigne la salle.
-- **Connexion directe impossible** (téléphone en 4G, réseau d'entreprise, box stricte) : l'application passe automatiquement par des serveurs TURN publics gratuits (Open Relay). Vous pouvez indiquer le vôtre : `?turn=turn:hote:3478&turnuser=…&turnpass=…`.
+- **Connexion directe impossible** (téléphone en 4G, réseau d'entreprise, box stricte, Safari récalcitrant) : l'application essaie d'abord des serveurs TURN publics (remplaçables par `?turn=turn:hote:3478&turnuser=…&turnpass=…`), puis bascule automatiquement sur un **relais de secours** : des brokers MQTT publics sur WebSocket (EMQX, HiveMQ, Mosquitto, en parallèle). Tout y est chiffré de bout en bout (AES-GCM, clé dérivée du lien de la salle, sujet haché) : les brokers ne voient que du bruit. Les participants joints ainsi apparaissent « (via relais) » dans la liste. Brokers personnalisés : `?mqtt=wss://hote:8084/mqtt,…` ; `npm run mqtt` lance un broker local pour les tests.
 - **Relais injoignable** (pastille rouge) : le réseau filtre les WebSockets vers les relais Nostr publics. Essayez un autre réseau, ou passez vos propres relais : `?relay=wss://relay1,wss://relay2`.
 - Les deux personnes doivent avoir l'onglet ouvert en même temps au moins une fois pour que le contenu se transmette ; ensuite chacun garde une copie locale.
 - **Safari** gèle l'onglet en arrière-plan et au verrouillage de l'écran : au retour, l'application réconcilie automatiquement son contenu avec les participants (toutes les 45 s aussi, par précaution). Sur Mac, le pincement du trackpad zoome le tableau.
@@ -66,6 +66,7 @@ Puis ouvrez <http://localhost:3000>. Une salle est créée automatiquement ; le 
 | `E` ou `G` | Gomme (efface les traits touchés) |
 | `T` | Texte / LaTeX (cliquer sur un texte existant pour le modifier) |
 | `M` ou `Espace` maintenu | Déplacer la vue |
+| Languette sur le bord de la barre d'outils | Replier / déplier la barre (à gauche sur ordinateur, en bas sur téléphone) |
 | `Ctrl` + molette | Zoom (la molette seule fait défiler) |
 | `Ctrl+Z` / `Ctrl+Y` | Annuler / rétablir |
 
@@ -75,5 +76,6 @@ Sur téléphone ou tablette : un doigt dessine (ou sélectionne, avec l'outil fl
 
 - `index.html`, `style.css`, `app.js` : toute l'application ; `latex-extras.mjs` : normalisation du préambule et traducteur bussproofs → fractions KaTeX (rendu canvas, outils, édition LaTeX, PDF avec pdf.js, export avec pdf-lib, synchronisation pair-à-pair, stockage local). Icônes [Lucide](https://lucide.dev) en SVG inline.
 - `vendor/` : KaTeX, pdf.js, pdf-lib et Trystero copiés depuis npm, pour que le site soit autonome. Régénérer avec `npm run vendor` après une mise à jour des dépendances.
-- `tools/relay.js` : relais Nostr minimal, optionnel, pour un usage privé ou les tests.
+- `mqtt-lite.mjs` : client MQTT minimal (WebSocket) pour le relais de secours.
+- `tools/relay.js` : relais Nostr minimal, optionnel, pour un usage privé ou les tests ; `tools/mqtt-broker.js` : broker MQTT local pour les tests.
 - `.github/workflows/pages.yml` : déploiement GitHub Pages.

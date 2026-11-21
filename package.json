@@ -5,7 +5,8 @@
   "scripts": {
     "start": "npx --yes http-server . -p 3000 -c-1",
     "vendor": "node scripts/vendor.js",
-    "relay": "node tools/relay.js"
+    "relay": "node tools/relay.js",
+    "mqtt": "node tools/mqtt-broker.js"
   },
   "repository": {
     "type": "git",
@@ -20,6 +21,7 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "aedes": "^1.2.0",
     "esbuild": "^0.28.2",
     "katex": "^0.19.1",
     "lucide-static": "^1.77.0",

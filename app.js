@@ -3,6 +3,7 @@
 import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
 import { joinRoom } from './vendor/trystero.js';
 import { normalizePreamble, translateProoftrees, BUILTIN_PACKAGES, EMULATED_PACKAGES } from './latex-extras.mjs';
+import { connectMqtt } from './mqtt-lite.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
 
@@ -39,7 +40,12 @@ const TURN_SERVERS = PAGE_URL.searchParams.get('turn')
     credential: 'openrelayproject',
   }];
 
+// Relais de secours : brokers MQTT publics sur WebSocket, utilisés pour les participants que WebRTC n'atteint pas.
+const MQTT_BROKERS = (PAGE_URL.searchParams.get('mqtt') || 'wss://broker.emqx.io:8084/mqtt,wss://broker.hivemq.com:8884/mqtt,wss://test.mosquitto.org:8081/mqtt')
+  .split(',').map((u) => u.trim()).filter(Boolean);
+
 const me = {
+  rid: uid(), // identité sur le relais de secours (stable pour la session)
   name: localStorage.getItem('wb-name') || NAMES[Math.floor(Math.random() * NAMES.length)],
   color: localStorage.getItem('wb-color') || PALETTE[1 + Math.floor(Math.random() * (PALETTE.length - 1))],
   id: null,
@@ -156,11 +162,15 @@ const net = { relay: 'connecting', peers: 0, lastError: '' };
 function renderNetStatus() {
   const dot = $('#net-dot');
   if (!dot) return;
+  const viaRelay = relayOnlyPeers().length;
+  const relayUp = relay.clients.some((c) => c.isOpen);
   let cls = 'connecting', title = 'Connexion aux relais de mise en relation…';
-  if (net.relay === 'error') { cls = 'error'; title = 'Relais injoignable : ' + net.lastError; }
-  else if (net.relay === 'offline') { cls = 'error'; title = 'Hors ligne'; }
-  else if (net.peers > 0) { cls = 'online'; title = `En ligne · ${net.peers} autre(s) participant(s)`; }
-  else if (net.relay === 'ready') { cls = 'ready'; title = 'Prêt : personne d’autre dans la salle pour l’instant. Partagez le lien.'; }
+  if (net.relay === 'offline') { cls = 'error'; title = 'Hors ligne'; }
+  else if (net.peers > 0 || viaRelay > 0) {
+    cls = 'online';
+    title = `En ligne · ${net.peers + viaRelay} autre(s) participant(s)` + (viaRelay ? ` dont ${viaRelay} via le relais de secours` : '');
+  } else if (net.relay === 'error') { cls = relayUp ? 'ready' : 'error'; title = (relayUp ? 'Relais de secours prêt. ' : '') + 'Mise en relation WebRTC injoignable : ' + net.lastError; }
+  else if (net.relay === 'ready' || relayUp) { cls = 'ready'; title = 'Prêt : personne d’autre dans la salle pour l’instant. Partagez le lien.'; }
   if (net.lastError && cls === 'online') title += ' · ' + net.lastError;
   dot.className = cls;
   dot.title = title;
@@ -170,10 +180,11 @@ function renderNetStatus() {
 function connect() {
   const config = { appId: APP_ID, identity: 'none', turnConfig: TURN_SERVERS };
   if (RELAYS) config.relayConfig = { urls: RELAYS.split(',').map((s) => s.trim()).filter(Boolean) };
+  relayStart();
   try {
     room = joinRoom(config, ROOM);
   } catch (err) {
-    setStatus('Mode hors ligne : ' + err.message, 'warn');
+    setStatus('WebRTC indisponible : ' + err.message + (crypto.subtle ? ' · relais de secours seul' : ''), 'warn');
     return;
   }
 
@@ -196,7 +207,7 @@ function connect() {
     }
   });
 
-  room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); });
+  room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); relayPresence(); });
   room.ready.then(() => { net.relay = 'ready'; renderNetStatus(); })
     .catch((err) => { net.relay = 'error'; net.lastError = err.message; renderNetStatus(); setStatus('Relais de mise en relation injoignable : ' + err.message, 'warn'); });
   room.onError((err) => {
@@ -207,7 +218,9 @@ function connect() {
     } else if (err.code === 'peer-connect-failed') {
       net.lastError = 'connexion directe impossible avec un participant' + (err.turnConfigured ? '' : ' (pas de TURN)');
       renderNetStatus();
-      setStatus('Connexion impossible avec un participant : son réseau ou le vôtre bloque WebRTC, même via TURN.', 'warn');
+      setStatus(relay.clients.some((c) => c.isOpen)
+        ? 'Connexion directe impossible avec un participant : le relais de secours prend le relais.'
+        : 'Connexion impossible avec un participant : son réseau ou le vôtre bloque WebRTC, même via TURN.', 'warn');
       setTimeout(() => setStatus(''), 8000);
     } else if (err.code === 'peer-error' || err.code === 'handshake-failed') {
       net.lastError = err.message; renderNetStatus();
@@ -290,6 +303,7 @@ async function reconcileWith(peerId) {
 let reconcileIndex = 0;
 function reconcileAll() {
   for (const id of peerIds()) reconcileWith(id);
+  for (const rid of relayOnlyPeers()) relaySend({ k: 'sync-req' }, rid);
 }
 setInterval(() => {
   const ids = peerIds();
@@ -302,8 +316,14 @@ window.addEventListener('online', () => setTimeout(reconcileAll, 3000));
 window.addEventListener('pageshow', (ev) => { if (ev.persisted) location.reload(); });
 
 function broadcast(kind, payload) {
-  if (!actions || !peerIds().length) return;
-  actions[kind].send(payload).catch(() => {});
+  if (actions && peerIds().length) actions[kind].send(payload).catch(() => {});
+  if (relayOnlyPeers().length) {
+    const now = performance.now();
+    const ephemeral = kind === 'cursor' || (kind === 'draft' && !(payload && payload.end));
+    if (ephemeral && now - (relay.lastSent[kind] || 0) < 250) return; // 4 Hz max sur le relais public
+    relay.lastSent[kind] = now;
+    relaySend({ k: kind, p: payload });
+  }
 }
 
 async function syncFrom(peerId) {
@@ -327,7 +347,7 @@ function mergeObjects(objs, fromPeer) {
     const cur = state.objects.get(obj.id);
     if (!cur || (obj.rev || 0) > (cur.rev || 0)) {
       state.objects.set(obj.id, obj);
-      if (isRect(obj)) fileHints.set(obj.fileId, fromPeer);
+      if (isRect(obj) && fromPeer && !String(fromPeer).startsWith('r:')) fileHints.set(obj.fileId, fromPeer);
       changed = true;
     }
   }
@@ -380,6 +400,181 @@ function handleOp(msg, peerId) {
       requestRender();
       break;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Relais de secours (MQTT sur WebSocket, chiffré de bout en bout)
+// ---------------------------------------------------------------------------
+// Quand WebRTC échoue (réseau restrictif, Safari capricieux), les participants se retrouvent sur un sujet
+// MQTT dérivé de la salle. Tout est chiffré en AES-GCM avec une clé dérivée du lien : les brokers publics
+// ne voient que du bruit. N'est utilisé pour les données que vers les participants injoignables en WebRTC.
+const relay = { clients: [], topic: null, key: null, peers: new Map(), seen: new Set(), seenOrder: [], chunks: new Map(), lastSent: {}, started: false };
+const RELAY_CHUNK = 48000; // caractères par message (limites des brokers publics)
+const textEnc = new TextEncoder();
+const textDec = new TextDecoder();
+
+async function relayStart() {
+  if (relay.started || !crypto.subtle || !MQTT_BROKERS.length) return;
+  relay.started = true;
+  const raw = await crypto.subtle.digest('SHA-256', textEnc.encode(`${APP_ID}:${ROOM}`));
+  relay.key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  const t = new Uint8Array(await crypto.subtle.digest('SHA-256', textEnc.encode(`topic:${APP_ID}:${ROOM}`)));
+  relay.topic = 'tableaublanc/v1/' + [...t.slice(0, 20)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  for (const url of MQTT_BROKERS) relayConnect(url, 0);
+  setInterval(relayPresence, 15000);
+  setInterval(relayPrune, 10000);
+  window.addEventListener('pagehide', () => relaySend({ k: 'bye' }));
+}
+
+function relayConnect(url, attempt) {
+  let client;
+  client = connectMqtt(url, {
+    onOpen() { client.subscribe(relay.topic); relayPresence(); renderNetStatus(); },
+    onMessage(_, bytes) { relayReceive(bytes); },
+    onClose() {
+      relay.clients = relay.clients.filter((c) => c !== client);
+      renderNetStatus();
+      if (navigator.onLine !== false) setTimeout(() => relayConnect(url, attempt + 1), Math.min(60000, 2000 * 2 ** attempt));
+    },
+  });
+  relay.clients.push(client);
+}
+
+async function relayEncrypt(str) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, relay.key, textEnc.encode(str)));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv); out.set(ct, 12);
+  return out;
+}
+
+async function relayPublish(obj) {
+  const bytes = await relayEncrypt(JSON.stringify(obj));
+  for (const c of relay.clients) if (c.isOpen) c.publish(relay.topic, bytes);
+}
+
+function relaySend(msg, to = null) {
+  if (!relay.key || !relay.clients.some((c) => c.isOpen)) return;
+  const base = { from: me.rid, pid: me.id, to };
+  const json = JSON.stringify(msg);
+  if (json.length <= RELAY_CHUNK) {
+    relayPublish({ ...base, id: uid(), m: msg }).catch(() => {});
+    return;
+  }
+  const cid = uid();
+  const n = Math.ceil(json.length / RELAY_CHUNK);
+  for (let i = 0; i < n; i++) {
+    relayPublish({ ...base, id: uid(), c: cid, i, n, d: json.slice(i * RELAY_CHUNK, (i + 1) * RELAY_CHUNK) }).catch(() => {});
+  }
+}
+
+function relaySeen(id) {
+  if (relay.seen.has(id)) return true;
+  relay.seen.add(id);
+  relay.seenOrder.push(id);
+  if (relay.seenOrder.length > 5000) relay.seen.delete(relay.seenOrder.shift());
+  return false;
+}
+
+async function relayReceive(bytes) {
+  let env;
+  try {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.subarray(0, 12) }, relay.key, bytes.subarray(12));
+    env = JSON.parse(textDec.decode(pt));
+  } catch (_) {
+    return; // autre salle, autre version, ou bruit
+  }
+  if (!env || env.from === me.rid || (env.to && env.to !== me.rid) || relaySeen(env.id)) return;
+  if (env.c) {
+    let entry = relay.chunks.get(env.c);
+    if (!entry) { entry = { parts: new Array(env.n), got: 0, at: Date.now() }; relay.chunks.set(env.c, entry); }
+    if (entry.parts[env.i] === undefined) { entry.parts[env.i] = env.d; entry.got++; }
+    if (entry.got < env.n) return;
+    relay.chunks.delete(env.c);
+    try { relayHandle(JSON.parse(entry.parts.join('')), env); } catch (_) { /* message corrompu */ }
+    return;
+  }
+  relayHandle(env.m, env);
+}
+
+function relayHandle(msg, env) {
+  if (!msg || typeof msg !== 'object') return;
+  const from = env.from;
+  const key = 'r:' + from;
+  switch (msg.k) {
+    case 'presence': {
+      const prev = relay.peers.get(from);
+      relay.peers.set(from, { name: msg.p?.name || 'Anonyme', color: msg.p?.color || '#9ca3af', pid: env.pid || null, last: Date.now() });
+      if (!prev || prev.name !== msg.p?.name || prev.color !== msg.p?.color || prev.pid !== env.pid) { renderUsers(); renderNetStatus(); }
+      if (!prev) {
+        relayPresence(); // qu'il nous connaisse tout de suite
+        if (relayOnly(from)) relaySend({ k: 'sync-req' }, from);
+      }
+      break;
+    }
+    case 'bye':
+      relay.peers.delete(from);
+      cursorsEl.querySelector(`[data-user="${key}"]`)?.remove();
+      state.drafts.delete(key);
+      renderUsers(); renderNetStatus(); requestRender();
+      break;
+    case 'op': handleOp(msg.p, key); break;
+    case 'draft':
+      if (msg.p && msg.p.points) state.drafts.set(key, msg.p); else state.drafts.delete(key);
+      requestRender();
+      break;
+    case 'cursor': updateRemoteCursor(key, msg.p); break;
+    case 'sync-req':
+      relaySend({ k: 'sync', p: { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble } }, from);
+      break;
+    case 'sync': {
+      const p = msg.p || {};
+      for (const [id, t] of p.tombstones || []) {
+        if (!state.tombstones.has(id)) { state.tombstones.set(id, t); if (state.objects.has(id)) removeObjectLocal(id); }
+      }
+      mergeObjects(p.objects || [], key);
+      if (typeof p.preamble === 'string' && p.preamble && !state.preamble) applyPreamble(p.preamble, { broadcast: false });
+      break;
+    }
+    case 'file-req':
+      if (files.has(msg.p)) relaySend({ k: 'file', p: { fileId: msg.p, data: bufToBase64(files.get(msg.p)) } }, from);
+      break;
+    case 'file': {
+      const { fileId, data } = msg.p || {};
+      if (!fileId || files.has(fileId) || typeof data !== 'string') break;
+      const buf = base64ToBuf(data);
+      sha256(buf).then((h) => { if (h === fileId) storeFile(fileId, buf); });
+      break;
+    }
+    case 'preamble':
+      if (typeof msg.p === 'string' && msg.p !== state.preamble) applyPreamble(msg.p, { broadcast: false });
+      break;
+  }
+}
+
+function relayOnly(rid) {
+  const p = relay.peers.get(rid);
+  return !!p && !(p.pid && peerIds().includes(p.pid));
+}
+function relayOnlyPeers() {
+  return [...relay.peers.keys()].filter(relayOnly);
+}
+function relayPresence() {
+  relaySend({ k: 'presence', p: { name: me.name, color: me.color } });
+}
+function relayPrune() {
+  const now = Date.now();
+  let changed = false;
+  for (const [rid, p] of relay.peers) {
+    if (now - p.last > 50000) {
+      relay.peers.delete(rid);
+      cursorsEl.querySelector(`[data-user="r:${rid}"]`)?.remove();
+      state.drafts.delete('r:' + rid);
+      changed = true;
+    }
+  }
+  for (const [cid, e] of relay.chunks) if (now - e.at > 300000) relay.chunks.delete(cid);
+  if (changed) { renderUsers(); renderNetStatus(); requestRender(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -761,8 +956,11 @@ async function sha256(buf) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+const fileWaiters = new Map(); // fileId -> callback (arrivée par le relais)
 function storeFile(fileId, buf) {
   files.set(fileId, buf);
+  fileWaiters.get(fileId)?.();
+  fileWaiters.delete(fileId);
   idbPut('files', fileId, buf);
   pdfDocs.delete(fileId);
   imageCache.delete(fileId);
@@ -783,6 +981,7 @@ function ensureFile(fileId) {
     const hinted = fileHints.get(fileId);
     const candidates = [...new Set([hinted, ...peerIds()].filter(Boolean))];
     for (const peerId of candidates) {
+      if (!actions) break;
       try {
         const bytes = await actions.file.request(fileId, { target: peerId, timeoutMs: 120000 });
         if (bytes && bytes.byteLength) {
@@ -790,6 +989,15 @@ function ensureFile(fileId) {
           if ((await sha256(buf)) === fileId) { storeFile(fileId, buf); return true; }
         }
       } catch (_) { /* pair suivant */ }
+    }
+    // Relais de secours : on demande à tous, le premier qui l'a répond.
+    if (relay.peers.size) {
+      relaySend({ k: 'file-req', p: fileId });
+      const ok = await new Promise((resolve) => {
+        const timer = setTimeout(() => { fileWaiters.delete(fileId); resolve(false); }, 180000);
+        fileWaiters.set(fileId, () => { clearTimeout(timer); resolve(true); });
+      });
+      if (ok) return true;
     }
     return false;
   })().finally(() => filePending.delete(fileId));
@@ -1589,6 +1797,10 @@ window.addEventListener('paste', (ev) => {
 // Curseurs et participants
 // ---------------------------------------------------------------------------
 function userOf(peerId) {
+  if (peerId.startsWith('r:')) {
+    const p = relay.peers.get(peerId.slice(2));
+    return { name: p?.name || 'Anonyme', color: p?.color || '#9ca3af', viaRelay: true };
+  }
   const userId = peerUsers.get(peerId) || room?.getPeers()[peerId]?.userId;
   const p = (profile && userId && profile.has(userId) && profile.get(userId)) || {};
   return { name: p.name || 'Anonyme', color: p.color || '#9ca3af' };
@@ -1616,7 +1828,7 @@ function updateRemoteCursor(peerId, msg) {
 function renderUsers() {
   const box = $('#users');
   box.replaceChildren();
-  const list = [{ name: me.name, color: me.color, self: true }, ...peerIds().map(userOf)];
+  const list = [{ name: me.name, color: me.color, self: true }, ...peerIds().map(userOf), ...relayOnlyPeers().map((rid) => userOf('r:' + rid))];
   for (const u of list) {
     const a = document.createElement('div');
     a.className = 'avatar';
@@ -1638,7 +1850,7 @@ function renderUsers() {
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.background = u.color;
-    li.append(dot, document.createTextNode(u.name + (u.self ? ' (moi)' : '')));
+    li.append(dot, document.createTextNode(u.name + (u.self ? ' (moi)' : u.viaRelay ? ' (via relais)' : '')));
     ul.appendChild(li);
   }
 }
@@ -1693,6 +1905,7 @@ function applyPreamble(text, { broadcast = true, save = true } = {}) {
   preambleRev++;
   if (save) scheduleSave();
   if (broadcast && preambleState) preambleState.set(text).catch(() => {});
+  if (broadcast && relayOnlyPeers().length) relaySend({ k: 'preamble', p: text });
   requestRender();
   return { error, unsupported };
 }
@@ -2164,6 +2377,7 @@ $('#btn-name').addEventListener('click', () => {
     me.name = name.trim().slice(0, 24);
     localStorage.setItem('wb-name', me.name);
     profile?.set({ name: me.name, color: me.color });
+    relayPresence();
     renderUsers();
   }
 });
@@ -2205,6 +2419,17 @@ window.addEventListener('pointerdown', (ev) => { if (!menu.hidden && !ev.target.
 window.addEventListener('resize', () => updateSelectionBox());
 // Hauteur réelle de la barre d'outils (variable CSS) pour placer l'infobulle au-dessus sur mobile.
 new ResizeObserver(() => document.documentElement.style.setProperty('--toolbar-h', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar'));
+// Repli de la barre d'outils (état mémorisé)
+{
+  const toolbar = $('#toolbar');
+  const setCollapsed = (on) => {
+    toolbar.classList.toggle('collapsed', on);
+    document.documentElement.style.setProperty('--toolbar-h', on ? '0px' : toolbar.offsetHeight + 'px');
+    try { localStorage.setItem('wb-toolbar-collapsed', on ? '1' : '0'); } catch (_) { /* stockage indisponible */ }
+  };
+  $('#toolbar-toggle').addEventListener('click', () => setCollapsed(!toolbar.classList.contains('collapsed')));
+  try { if (localStorage.getItem('wb-toolbar-collapsed') === '1') setCollapsed(true); } catch (_) { /* ignore */ }
+}
 
 window.addEventListener('keydown', (ev) => {
   if (editing || /^(INPUT|TEXTAREA)$/.test(ev.target.tagName) || ev.target.closest('dialog')) return;
@@ -2264,4 +2489,4 @@ connect();
 loadLocal().then(() => fitView());
 
 // Accès à l'état pour le débogage et les tests.
-window.tableaublanc = { state, files, get room() { return room; }, reconcileAll };
+window.tableaublanc = { state, files, get room() { return room; }, reconcileAll, relay };
