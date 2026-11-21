@@ -27,7 +27,7 @@ Conséquences à connaître :
 
 ### Si la collaboration ne s'établit pas
 
-La pastille à gauche des avatars indique l'état : orange clignotant = connexion aux relais, bleu = prêt mais seul dans la salle, vert = au moins un autre participant connecté, rouge = relais injoignable (survolez-la pour le détail).
+Le petit badge sur votre avatar indique l'état : orange clignotant = connexion aux relais, bleu = prêt mais seul dans la salle, vert = au moins un autre participant connecté, rouge = relais injoignable (survolez-la pour le détail).
 
 - **Vérifiez que l'URL est identique** des deux côtés, paramètre `room` compris : c'est lui qui désigne la salle.
 - **Connexion directe impossible** (téléphone en 4G, réseau d'entreprise, box stricte, Safari récalcitrant) : l'application essaie d'abord des serveurs TURN publics (remplaçables par `?turn=turn:hote:3478&turnuser=…&turnpass=…`), puis bascule automatiquement sur un **relais de secours** : des brokers MQTT publics sur WebSocket (EMQX, HiveMQ, Mosquitto, en parallèle). Tout y est chiffré de bout en bout (AES-GCM, clé dérivée du lien de la salle, sujet haché) : les brokers ne voient que du bruit. Les participants joints ainsi apparaissent « (via relais) » dans la liste. Brokers personnalisés : `?mqtt=wss://hote:8084/mqtt,…` ; `npm run mqtt` lance un broker local pour les tests.

@@ -166,7 +166,7 @@ function peerIds() {
 // Indicateur de connexion : pastille à côté des participants.
 const net = { relay: 'connecting', peers: 0, lastError: '' };
 function renderNetStatus() {
-  const dot = $('#net-dot');
+  const dot = $('#users .avatar.me .status');
   if (!dot) return;
   const viaRelay = relayOnlyPeers().length;
   const relayUp = relay.clients.some((c) => c.isOpen);
@@ -178,9 +178,9 @@ function renderNetStatus() {
   } else if (net.relay === 'error') { cls = relayUp ? 'ready' : 'error'; title = (relayUp ? 'Relais de secours prêt. ' : '') + 'Mise en relation WebRTC injoignable : ' + net.lastError; }
   else if (net.relay === 'ready' || relayUp) { cls = 'ready'; title = 'Prêt : personne d’autre dans la salle pour l’instant. Partagez le lien.'; }
   if (net.lastError && cls === 'online') title += ' · ' + net.lastError;
-  dot.className = cls;
-  dot.title = title;
+  dot.className = 'status ' + cls;
   $('#users').title = title;
+  net.title = title;
 }
 
 function connect() {
@@ -2090,13 +2090,15 @@ function renderUsers() {
   const list = [{ name: me.name, color: me.color, self: true }, ...peerIds().map(userOf), ...relayOnlyPeers().map((rid) => userOf('r:' + rid))];
   for (const u of list) {
     const a = document.createElement('div');
-    a.className = 'avatar';
+    a.className = 'avatar' + (u.self ? ' me' : '');
     a.style.background = u.color;
     a.textContent = (u.name || '?')[0].toUpperCase();
     a.title = u.name + (u.self ? ' (moi)' : '');
+    if (u.self) a.appendChild(Object.assign(document.createElement('i'), { className: 'status' }));
     box.appendChild(a);
   }
-  box.title = list.length > 1 ? `${list.length} participants` : 'Participants';
+  renderNetStatus();
+  if (!net.title) box.title = list.length > 1 ? `${list.length} participants` : 'Participants';
   $('#btn-name').textContent = me.name;
   const ul = $('#users-list');
   ul.replaceChildren();

@@ -255,19 +255,21 @@ button.danger:hover { background: #fee2e2; }
 button:disabled { opacity: .4; cursor: default; background: transparent; }
 .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
 
-#net-dot {
-  width: 9px;
-  height: 9px;
+#users .avatar { position: relative; }
+#users .avatar .status {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  margin: 0 2px 0 6px;
-  flex: none;
   background: #9ca3af;
-  box-shadow: 0 0 0 2px white;
+  border: 2px solid white;
 }
-#net-dot.connecting { background: #f59e0b; animation: pulse 1.2s ease-in-out infinite; }
-#net-dot.ready { background: #3b82f6; }
-#net-dot.online { background: #16a34a; }
-#net-dot.error { background: #dc2626; }
+#users .avatar .status.connecting { background: #f59e0b; animation: pulse 1.2s ease-in-out infinite; }
+#users .avatar .status.ready { background: #3b82f6; }
+#users .avatar .status.online { background: #16a34a; }
+#users .avatar .status.error { background: #dc2626; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 #users { display: flex; align-items: center; padding: 0 4px; cursor: pointer; border-radius: 9px; }
 #users:hover { background: #eef1f5; }
