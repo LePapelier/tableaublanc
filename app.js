@@ -1606,6 +1606,43 @@ function openPreamble() {
 }
 
 $('#btn-preamble').addEventListener('click', openPreamble);
+
+// Chargement d'un préambule depuis un fichier (.tex, .sty…) : appliqué directement ; en cas d'erreur, la boîte s'ouvre.
+async function loadPreambleFile(file) {
+  const text = await file.text();
+  if (text.length > 200000) throw new Error('fichier trop volumineux');
+  const { error, unsupported } = applyPreamble(text);
+  if (error) {
+    openPreamble();
+    setPreambleStatus('Erreur : ' + error, true);
+    return;
+  }
+  const note = unsupported.length ? ' · non pris en charge : ' + unsupported.join(', ') : '';
+  flash(`Préambule « ${file.name} » appliqué${note}`, note ? 6000 : 3000);
+}
+$('#preamble-input').addEventListener('change', (ev) => {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (file) loadPreambleFile(file).catch((err) => flash('Fichier illisible : ' + err.message));
+});
+$('#preamble-load').addEventListener('click', () => {
+  // Depuis la boîte : on remplit la zone de texte sans appliquer, l'utilisateur valide.
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.tex,.sty,.txt,.cls,text/plain';
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    if (!file) return;
+    $('#preamble-text').value = await file.text();
+    setPreambleStatus(`« ${file.name} » chargé : cliquez sur Appliquer.`);
+  });
+  input.click();
+});
+$('#preamble-download').addEventListener('click', () => {
+  const text = $('#preamble-text').value;
+  if (!text.trim()) { setPreambleStatus('Le préambule est vide.'); return; }
+  download(new Blob([text], { type: 'text/plain' }), `preambule-${ROOM}.tex`);
+});
 $('#preamble-cancel').addEventListener('click', () => preambleDialog.close());
 $('#preamble-apply').addEventListener('click', () => {
   const { error, unsupported } = applyPreamble($('#preamble-text').value);

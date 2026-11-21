@@ -483,4 +483,5 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 #preamble-text:focus { border-color: var(--accent); }
 #preamble-status { min-height: 18px; margin: 8px 0; white-space: pre-wrap; }
 #preamble-status.error { color: var(--danger); }
-#preamble-dialog .actions { display: flex; justify-content: flex-end; gap: 6px; }
+#preamble-dialog .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#preamble-dialog .actions .spacer { flex: 1; }
