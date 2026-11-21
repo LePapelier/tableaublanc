@@ -2125,12 +2125,13 @@ function renderUsers() {
   head.appendChild(Object.assign(document.createElement('code'), { textContent: ROOM }));
   const count = document.createElement('span');
   count.className = 'count';
-  count.textContent = list.length > 1 ? `${list.length} participants` : 'vous seul·e';
+  count.textContent = list.length > 1 ? `${list.length} participants` : '';
   head.appendChild(count);
   ul.appendChild(head);
 
   const rows = [{ ...list[0], uid: me.uid }, ...peerIds().map((p) => ({ ...userOf(p), uid: uidOfPeer(p) })), ...relayOnlyPeers().map((rid) => ({ ...userOf('r:' + rid), uid: relay.peers.get(rid)?.uid || '' }))];
-  for (const u of rows) {
+  const alone = rows.length === 1 && isLeader();
+  for (const u of alone ? [] : rows) {
     const li = document.createElement('li');
     li.className = 'person';
     const av = document.createElement('span');
@@ -2183,18 +2184,13 @@ function renderUsers() {
   foot.className = 'foot';
   if (isLeader()) {
     const restricted = a.mode === 'restricted';
-    foot.innerHTML = '<span class="label">Écriture</span>';
-    const seg = document.createElement('div');
-    seg.className = 'segmented';
-    for (const [mode, label] of [['open', 'Tout le monde'], ['restricted', 'Autorisés seulement']]) {
-      const b = document.createElement('button');
-      b.className = (restricted ? mode === 'restricted' : mode === 'open') ? 'on' : '';
-      b.dataset.mode = mode;
-      b.textContent = label;
-      b.addEventListener('click', (ev) => { ev.stopPropagation(); if (a.mode !== mode) leaderUpdate({ mode }); });
-      seg.appendChild(b);
-    }
-    foot.appendChild(seg);
+    const b = document.createElement('button');
+    b.className = 'text lock' + (restricted ? ' locked' : '');
+    b.dataset.mode = restricted ? 'open' : 'restricted';
+    b.title = restricted ? 'Cliquer pour laisser tout le monde écrire' : 'Cliquer pour réserver l’écriture aux participants autorisés';
+    b.innerHTML = (restricted ? ICONS.lock : ICONS.lockOpen) + '<span>' + (restricted ? 'Autorisés seulement' : 'Tout le monde peut écrire') + '</span>';
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); leaderUpdate({ mode: restricted ? 'open' : 'restricted' }); });
+    foot.appendChild(b);
   } else if (a && a.leader) {
     const leaderName = a.names?.[a.leader] || 'un autre participant';
     foot.innerHTML = `<span class="label">Leader</span><span class="muted">${escapeHtml(leaderName)}${a.mode === 'restricted' ? '' : ' · écriture libre'}</span>`;

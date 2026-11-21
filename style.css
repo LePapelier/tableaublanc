@@ -316,12 +316,13 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 #users-list .badge.toggle:hover { background: var(--accent-soft); }
 #users-list .badge.ghost { opacity: .35; }
 #users-list .badge.ghost:hover { opacity: 1; color: #d97706; background: #fef3c7; }
-#users-list li.foot { border-top: 1px solid var(--border); background: #f7f8fa; flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 14px 14px; }
+#users-list li.foot { border-top: 1px solid var(--border); background: #f7f8fa; flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 14px 12px; }
+#users-list li.foot .label { display: none; }
 #users-list li.foot .muted { font-size: 13px; }
-#users-list .segmented { display: grid; grid-template-columns: 1fr 1fr; background: #e9ecf1; border-radius: 10px; padding: 3px; gap: 3px; }
-#users-list .segmented button { height: 32px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted); padding: 0 6px; white-space: nowrap; }
-#users-list .segmented button:hover { background: rgba(255,255,255,.6); }
-#users-list .segmented button.on { background: white; color: var(--text); box-shadow: 0 1px 3px rgba(15,23,42,.1); }
+#users-list button.lock { height: 38px; width: 100%; justify-content: flex-start; gap: 10px; background: white; border: 1px solid var(--border); font-size: 13px; }
+#users-list button.lock svg { width: 17px; height: 17px; }
+#users-list button.lock.locked { color: #b45309; border-color: #fcd34d; background: #fffbeb; }
+#users-list button.lock:hover { border-color: var(--accent); }
 #users-list button.text.wide { height: 34px; justify-content: center; background: white; border: 1px solid var(--border); }
 .tool.disabled { opacity: .35; pointer-events: none; }
 body.readonly #board { cursor: not-allowed; }
