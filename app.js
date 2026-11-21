@@ -2102,65 +2102,89 @@ function renderUsers() {
   $('#btn-name').textContent = me.name;
   const ul = $('#users-list');
   ul.replaceChildren();
+  const a = state.access;
   const head = document.createElement('li');
   head.className = 'room';
-  head.append('Salle ', Object.assign(document.createElement('code'), { textContent: ROOM }));
+  head.innerHTML = '<span class="label">Salle</span>';
+  head.appendChild(Object.assign(document.createElement('code'), { textContent: ROOM }));
+  const count = document.createElement('span');
+  count.className = 'count';
+  count.textContent = list.length > 1 ? `${list.length} participants` : 'vous seul·e';
+  head.appendChild(count);
   ul.appendChild(head);
-  const a = state.access;
+
   const rows = [{ ...list[0], uid: me.uid }, ...peerIds().map((p) => ({ ...userOf(p), uid: uidOfPeer(p) })), ...relayOnlyPeers().map((rid) => ({ ...userOf('r:' + rid), uid: relay.peers.get(rid)?.uid || '' }))];
   for (const u of rows) {
     const li = document.createElement('li');
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.style.background = u.color;
+    li.className = 'person';
+    const av = document.createElement('span');
+    av.className = 'av';
+    av.style.background = u.color;
+    av.textContent = (u.name || '?')[0].toUpperCase();
+    const text = document.createElement('span');
+    text.className = 'who';
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = u.name + (u.self ? ' (moi)' : u.viaRelay ? ' (via relais)' : '');
-    li.append(dot, name);
-    const leaderHere = a && a.leader && u.uid === a.leader;
-    if (leaderHere) li.insertAdjacentHTML('beforeend', '<span class="badge leader" title="Leader de la salle">' + ICONS.crown + '</span>');
-    else if (a && a.mode === 'restricted') {
-      const w = canWrite(u.uid);
-      if (isLeader() && u.uid) {
+    name.textContent = u.name + (u.self ? ' (moi)' : '');
+    const sub = document.createElement('span');
+    sub.className = 'sub';
+    const isLead = a && a.leader && u.uid === a.leader;
+    const w = canWrite(u.uid);
+    const parts = [];
+    if (isLead) parts.push('leader');
+    else if (a && a.mode === 'restricted') parts.push(w ? 'peut écrire' : 'lecture seule');
+    if (u.viaRelay) parts.push('via relais');
+    sub.textContent = parts.join(' · ');
+    text.append(name, sub);
+    li.append(av, text);
+    const actions = document.createElement('span');
+    actions.className = 'actions';
+    if (isLead) {
+      actions.insertAdjacentHTML('beforeend', '<span class="badge leader" title="Leader de la salle">' + ICONS.crown + '</span>');
+    } else if (isLeader() && u.uid) {
+      if (a.mode === 'restricted') {
         const b = document.createElement('button');
         b.className = 'badge toggle' + (w ? ' on' : '');
-        b.title = w ? 'Peut écrire : cliquer pour passer en lecture seule' : 'Lecture seule : cliquer pour autoriser l’écriture';
+        b.title = w ? 'Peut écrire : passer en lecture seule' : 'Lecture seule : autoriser l’écriture';
         b.innerHTML = w ? ICONS.pencil : ICONS.eye;
         b.addEventListener('click', (ev) => { ev.stopPropagation(); leaderUpdate({ writers: { [u.uid]: !w }, names: { [u.uid]: u.name } }); });
-        li.appendChild(b);
-      } else {
-        li.insertAdjacentHTML('beforeend', `<span class="badge ${w ? 'on' : ''}" title="${w ? 'Peut écrire' : 'Lecture seule'}">${w ? ICONS.pencil : ICONS.eye}</span>`);
+        actions.appendChild(b);
       }
-    }
-    if (isLeader() && !u.self && u.uid) {
       const t = document.createElement('button');
       t.className = 'badge ghost';
       t.title = 'Transférer le rôle de leader';
       t.innerHTML = ICONS.crown;
       t.addEventListener('click', (ev) => { ev.stopPropagation(); if (confirm(`Faire de ${u.name} le leader de la salle ?`)) leaderUpdate({ leader: u.uid, names: { [u.uid]: u.name }, writers: { [me.uid]: true } }); }); // l'ancien leader garde l'écriture
-      li.appendChild(t);
+      actions.appendChild(t);
+    } else if (a && a.mode === 'restricted') {
+      actions.insertAdjacentHTML('beforeend', `<span class="badge ${w ? 'on' : ''}" title="${w ? 'Peut écrire' : 'Lecture seule'}">${w ? ICONS.pencil : ICONS.eye}</span>`);
     }
+    li.appendChild(actions);
     ul.appendChild(li);
   }
+
   const foot = document.createElement('li');
   foot.className = 'foot';
   if (isLeader()) {
     const restricted = a.mode === 'restricted';
-    const b = document.createElement('button');
-    b.className = 'text';
-    b.innerHTML = (restricted ? ICONS.lock : ICONS.lockOpen) + '<span>' + (restricted ? 'Écriture : autorisés seulement' : 'Écriture : tout le monde') + '</span>';
-    b.title = 'Changer le mode d’écriture de la salle';
-    b.addEventListener('click', (ev) => { ev.stopPropagation(); leaderUpdate({ mode: restricted ? 'open' : 'restricted' }); });
-    foot.appendChild(b);
+    foot.innerHTML = '<span class="label">Écriture</span>';
+    const seg = document.createElement('div');
+    seg.className = 'segmented';
+    for (const [mode, label] of [['open', 'Tout le monde'], ['restricted', 'Autorisés seulement']]) {
+      const b = document.createElement('button');
+      b.className = (restricted ? mode === 'restricted' : mode === 'open') ? 'on' : '';
+      b.dataset.mode = mode;
+      b.textContent = label;
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); if (a.mode !== mode) leaderUpdate({ mode }); });
+      seg.appendChild(b);
+    }
+    foot.appendChild(seg);
   } else if (a && a.leader) {
     const leaderName = a.names?.[a.leader] || 'un autre participant';
-    const info = document.createElement('span');
-    info.className = 'muted';
-    info.textContent = (a.mode === 'restricted' ? 'Écriture sur autorisation · ' : 'Écriture libre · ') + 'leader : ' + leaderName;
-    foot.appendChild(info);
+    foot.innerHTML = `<span class="label">Écriture</span><span class="muted">${a.mode === 'restricted' ? 'sur autorisation' : 'libre'} · leader : ${escapeHtml(leaderName)}</span>`;
     if (!leaderPresent()) {
       const b = document.createElement('button');
-      b.className = 'text';
+      b.className = 'text wide';
       b.innerHTML = ICONS.crown + '<span>Prendre la main</span>';
       b.title = 'Le leader est absent : devenir leader';
       b.addEventListener('click', (ev) => { ev.stopPropagation(); claimLeader(); });
@@ -2168,7 +2192,7 @@ function renderUsers() {
     }
   } else {
     const b = document.createElement('button');
-    b.className = 'text';
+    b.className = 'text wide';
     b.innerHTML = ICONS.crown + '<span>Devenir leader</span>';
     b.addEventListener('click', (ev) => { ev.stopPropagation(); claimLeader(); });
     foot.appendChild(b);
