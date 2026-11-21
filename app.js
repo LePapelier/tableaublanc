@@ -45,6 +45,7 @@ const MQTT_BROKERS = (PAGE_URL.searchParams.get('mqtt') || 'wss://broker.emqx.io
   .split(',').map((u) => u.trim()).filter(Boolean);
 
 const me = {
+  uid: localStorage.getItem('wb-uid') || uid(), // identité stable de ce navigateur (droits d'accès)
   rid: uid(), // identité sur le relais de secours (stable pour la session)
   name: localStorage.getItem('wb-name') || NAMES[Math.floor(Math.random() * NAMES.length)],
   color: localStorage.getItem('wb-color') || PALETTE[1 + Math.floor(Math.random() * (PALETTE.length - 1))],
@@ -52,6 +53,7 @@ const me = {
 };
 localStorage.setItem('wb-name', me.name);
 localStorage.setItem('wb-color', me.color);
+localStorage.setItem('wb-uid', me.uid);
 
 // ---------------------------------------------------------------------------
 // État
@@ -67,6 +69,7 @@ const state = {
   fontSize: 24,
   selected: new Set(), // ids sélectionnés
   preamble: '', // préambule LaTeX partagé (macros)
+  access: null, // droits : { leader, mode: 'open' | 'restricted', writers: { uid: true } }
   undo: [],
   redo: [],
 };
@@ -126,7 +129,7 @@ function scheduleSave() {
     saveTimer = null;
     const cutoff = Date.now() - 7 * 86400e3;
     for (const [id, t] of state.tombstones) if (t < cutoff) state.tombstones.delete(id);
-    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble });
+    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access });
   }, 800);
 }
 
@@ -135,6 +138,7 @@ async function loadLocal() {
   if (!saved) return;
   for (const [id, t] of saved.tombstones || []) state.tombstones.set(id, t);
   if (saved.preamble) applyPreamble(saved.preamble, { broadcast: false, save: false });
+  if (saved.access && saved.access.leader && !state.access) setAccess(saved.access, { broadcast: false, save: false });
   mergeObjects(saved.objects || [], null);
 }
 
@@ -145,6 +149,7 @@ let room = null;
 let actions = null;
 let profile = null;
 let preambleState = null; // état partagé du préambule (synchronisé aux retardataires)
+let accessState = null; // état partagé des droits
 const peerUsers = new Map(); // peerId -> userId
 
 function setStatus(text, kind = '') {
@@ -197,8 +202,20 @@ function connect() {
     digest: room.makeAction('digest', { kind: 'request' }),
     fetch: room.makeAction('fetch', { kind: 'request' }),
   };
-  profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af' });
-  profile.set({ name: me.name, color: me.color }).catch(() => {});
+  profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af', uid: '' });
+  profile.set({ name: me.name, color: me.color, uid: me.uid }).catch(() => {});
+  accessState = room.makeState('access', null, {
+    // Seul le leader en place peut modifier les droits (ou n'importe qui tant qu'il n'y en a pas).
+    validate: (next, ctx) => {
+      const cur = state.access;
+      if (!cur || !cur.leader || ctx.peerId === me.id) return true;
+      const uid = uidOfPeer(ctx.peerId);
+      return !uid || uid === cur.leader;
+    },
+  });
+  accessState.onChange((value) => {
+    if (value && value.leader && JSON.stringify(value) !== JSON.stringify(state.access)) setAccess(value, { broadcast: false });
+  });
   preambleState = room.makeState('preamble', '');
   preambleState.onChange((value) => {
     if (typeof value === 'string' && value !== state.preamble) {
@@ -208,7 +225,11 @@ function connect() {
   });
 
   room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); relayPresence(); });
-  room.ready.then(() => { net.relay = 'ready'; renderNetStatus(); })
+  room.ready.then(() => {
+    net.relay = 'ready'; renderNetStatus();
+    // Salle sans leader connu après quelques secondes : le premier arrivé prend le rôle.
+    setTimeout(() => { if (!state.access && !peerIds().length && !relay.peers.size) claimLeader(); }, 2500);
+  })
     .catch((err) => { net.relay = 'error'; net.lastError = err.message; renderNetStatus(); setStatus('Relais de mise en relation injoignable : ' + err.message, 'warn'); });
   room.onError((err) => {
     console.warn('Trystero :', err.code, err.message);
@@ -232,6 +253,7 @@ function connect() {
 
   actions.op.onMessage((msg, { peerId }) => handleOp(msg, peerId));
   actions.draft.onMessage((msg, { peerId }) => {
+    if (!peerCanWrite(peerId)) return;
     if (msg && msg.points) state.drafts.set(peerId, msg);
     else state.drafts.delete(peerId);
     requestRender();
@@ -248,7 +270,7 @@ function connect() {
     return buf ? new Uint8Array(buf) : null;
   });
 
-  profile.onChange(() => renderUsers());
+  profile.onChange(() => { renderUsers(); applyAccess(); });
   room.onPeerJoin(({ peerId, userId }) => {
     peerUsers.set(peerId, userId);
     setStatus('');
@@ -257,6 +279,7 @@ function connect() {
     syncFrom(peerId);
     // Un préambule local jamais publié (salle rouverte seul) est partagé au premier arrivant.
     if (state.preamble && preambleState && !preambleState.get()) preambleState.set(state.preamble).catch(() => {});
+    if (state.access && accessState && !accessState.get()) accessState.set(state.access).catch(() => {});
   });
   room.onPeerLeave(({ peerId }) => {
     peerUsers.delete(peerId);
@@ -359,6 +382,7 @@ function mergeObjects(objs, fromPeer) {
 
 function handleOp(msg, peerId) {
   if (!msg || typeof msg !== 'object') return;
+  if (!peerCanWrite(peerId)) return; // participant en lecture seule : modification ignorée
   switch (msg.t) {
     case 'add':
       if (msg.obj && typeof msg.obj.id === 'string') state.tombstones.delete(msg.obj.id); // ré-ajout explicite (rétablir)
@@ -504,8 +528,8 @@ function relayHandle(msg, env) {
   switch (msg.k) {
     case 'presence': {
       const prev = relay.peers.get(from);
-      relay.peers.set(from, { name: msg.p?.name || 'Anonyme', color: msg.p?.color || '#9ca3af', pid: env.pid || null, last: Date.now() });
-      if (!prev || prev.name !== msg.p?.name || prev.color !== msg.p?.color || prev.pid !== env.pid) { renderUsers(); renderNetStatus(); }
+      relay.peers.set(from, { name: msg.p?.name || 'Anonyme', color: msg.p?.color || '#9ca3af', uid: msg.p?.uid || '', pid: env.pid || null, last: Date.now() });
+      if (!prev || prev.name !== msg.p?.name || prev.color !== msg.p?.color || prev.pid !== env.pid) { renderUsers(); renderNetStatus(); applyAccess(); }
       if (!prev) {
         relayPresence(); // qu'il nous connaisse tout de suite
         if (relayOnly(from)) relaySend({ k: 'sync-req' }, from);
@@ -520,12 +544,19 @@ function relayHandle(msg, env) {
       break;
     case 'op': handleOp(msg.p, key); break;
     case 'draft':
+      if (!peerCanWrite(key)) break;
       if (msg.p && msg.p.points) state.drafts.set(key, msg.p); else state.drafts.delete(key);
       requestRender();
       break;
+    case 'access': {
+      const cur = state.access;
+      const fromUid = relay.peers.get(from)?.uid;
+      if (msg.p && msg.p.leader && (!cur || !cur.leader || fromUid === cur.leader)) setAccess(msg.p, { broadcast: false });
+      break;
+    }
     case 'cursor': updateRemoteCursor(key, msg.p); break;
     case 'sync-req':
-      relaySend({ k: 'sync', p: { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble } }, from);
+      relaySend({ k: 'sync', p: { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access } }, from);
       break;
     case 'sync': {
       const p = msg.p || {};
@@ -534,6 +565,7 @@ function relayHandle(msg, env) {
       }
       mergeObjects(p.objects || [], key);
       if (typeof p.preamble === 'string' && p.preamble && !state.preamble) applyPreamble(p.preamble, { broadcast: false });
+      if (p.access && p.access.leader && !state.access) setAccess(p.access, { broadcast: false });
       break;
     }
     case 'file-req':
@@ -560,7 +592,7 @@ function relayOnlyPeers() {
   return [...relay.peers.keys()].filter(relayOnly);
 }
 function relayPresence() {
-  relaySend({ k: 'presence', p: { name: me.name, color: me.color } });
+  relaySend({ k: 'presence', p: { name: me.name, color: me.color, uid: me.uid } });
 }
 function relayPrune() {
   const now = Date.now();
@@ -587,6 +619,7 @@ function removeObjectLocal(id) {
 }
 
 function applyOp(op, record = true) {
+  if (!iCanWrite()) { flash('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
   switch (op.t) {
     case 'add':
       for (const obj of op.objs) {
@@ -631,6 +664,7 @@ function applyOp(op, record = true) {
 
 // Envoi d'une mise à jour transitoire (déplacement en cours) sans l'enregistrer dans l'historique.
 function pushLive(objs) {
+  if (!iCanWrite()) return;
   const items = objs.map((obj) => {
     obj.rev = (obj.rev || 0) + 1;
     return { id: obj.id, patch: { ...snapshot(obj), rev: obj.rev } };
@@ -1121,6 +1155,7 @@ async function insertImageFile(file, wx, wy) {
 
 // Aiguillage PDF / image pour les fichiers déposés, choisis ou collés.
 function insertFiles(fileList, wx, wy) {
+  if (!iCanWrite()) { flash('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
   let offset = 0;
   for (const file of fileList) {
     if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) insertPdfFile(file, wx + offset, wy);
@@ -1507,6 +1542,10 @@ canvas.addEventListener('pointerdown', (ev) => {
     return;
   }
 
+  if ((tool === 'pen' || tool === 'marker' || tool === 'eraser' || tool === 'text') && !iCanWrite()) {
+    flash('Lecture seule : le leader ne vous a pas autorisé à écrire');
+    return;
+  }
   if (tool === 'pen' || tool === 'marker') {
     currentStroke = {
       id: uid(), type: 'stroke', points: [wx, wy], color: state.color,
@@ -1533,7 +1572,7 @@ canvas.addEventListener('pointerdown', (ev) => {
 
   if (tool === 'select' || tool === 'lasso') {
     const sel = selectedObjects();
-    if (sel.length) {
+    if (sel.length && iCanWrite()) {
       const rh = rotateHandlePos();
       if (rh && dist(ev.clientX, ev.clientY, rh[0], rh[1]) <= (touch ? 28 : 14)) {
         const b = selectionBounds();
@@ -1563,7 +1602,7 @@ canvas.addEventListener('pointerdown', (ev) => {
         setSelection([hit.id]);
       }
       const objs = selectedObjects();
-      drag = { kind: 'move', objs, before: new Map(objs.map((o) => [o.id, snapshot(o)])), x0: wx, y0: wy, moved: false };
+      drag = iCanWrite() ? { kind: 'move', objs, before: new Map(objs.map((o) => [o.id, snapshot(o)])), x0: wx, y0: wy, moved: false } : null;
     } else {
       const keep = ev.shiftKey ? [...state.selected] : [];
       if (!ev.shiftKey) setSelection([]);
@@ -1751,7 +1790,7 @@ function eraseAt(wx, wy, d) {
 }
 
 canvas.addEventListener('dblclick', (ev) => {
-  if (state.tool !== 'select' && state.tool !== 'lasso') return;
+  if ((state.tool !== 'select' && state.tool !== 'lasso') || !iCanWrite()) return;
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
   const hit = hitTest(wx, wy);
   if (hit && hit.type === 'text') openEditor(0, 0, hit);
@@ -1792,6 +1831,69 @@ window.addEventListener('paste', (ev) => {
   const [wx, wy] = toWorld(canvas.clientWidth / 2 - 200 * state.view.scale, canvas.clientHeight / 2 - 150 * state.view.scale);
   insertFiles(imgs, wx, wy);
 });
+
+// ---------------------------------------------------------------------------
+// Leader et droits d'écriture
+// ---------------------------------------------------------------------------
+// Protection d'usage (classe, atelier) : les clients appliquent les droits et ignorent les modifications des
+// participants en lecture seule ; ce n'est pas une garantie cryptographique.
+function uidOfPeer(peerKey) {
+  if (!peerKey) return me.uid;
+  if (String(peerKey).startsWith('r:')) return relay.peers.get(peerKey.slice(2))?.uid || '';
+  const userId = peerUsers.get(peerKey) || room?.getPeers()[peerKey]?.userId;
+  return (profile && userId && profile.has(userId) && profile.get(userId)?.uid) || '';
+}
+function canWrite(uid) {
+  const a = state.access;
+  if (!a || !a.leader || a.mode !== 'restricted') return true;
+  return !!uid && (uid === a.leader || !!(a.writers && a.writers[uid]));
+}
+function iCanWrite() { return canWrite(me.uid); }
+function peerCanWrite(peerKey) {
+  const a = state.access;
+  if (!a || !a.leader || a.mode !== 'restricted') return true;
+  return canWrite(uidOfPeer(peerKey));
+}
+function isLeader() { return !!state.access && state.access.leader === me.uid; }
+function leaderPresent() {
+  if (!state.access) return false;
+  if (isLeader()) return true;
+  return peerIds().some((p) => uidOfPeer(p) === state.access.leader) || [...relay.peers.values()].some((p) => p.uid === state.access.leader);
+}
+
+function setAccess(access, { broadcast = true, save = true } = {}) {
+  state.access = { leader: access.leader, mode: access.mode === 'restricted' ? 'restricted' : 'open', writers: { ...(access.writers || {}) }, names: { ...(access.names || {}) } };
+  if (save) scheduleSave();
+  if (broadcast) {
+    if (accessState) accessState.set(state.access).catch(() => {});
+    if (relay.peers.size) relaySend({ k: 'access', p: state.access });
+  }
+  applyAccess();
+}
+function claimLeader() {
+  setAccess({ leader: me.uid, mode: 'open', writers: {}, names: { [me.uid]: me.name } });
+  flash('Vous êtes le leader de la salle');
+}
+function leaderUpdate(patch) {
+  if (!isLeader()) return;
+  const a = state.access;
+  setAccess({ ...a, ...patch, writers: { ...a.writers, ...(patch.writers || {}) }, names: { ...a.names, ...(patch.names || {}) } });
+}
+
+const WRITE_TOOLS = ['pen', 'marker', 'eraser', 'text'];
+let lastWriteState = null;
+function applyAccess() {
+  const can = iCanWrite();
+  document.body.classList.toggle('readonly', !can);
+  for (const t of WRITE_TOOLS) document.querySelector(`.tool[data-tool="${t}"]`)?.classList.toggle('disabled', !can);
+  document.querySelector('.tool.file')?.classList.toggle('disabled', !can);
+  if (!can && WRITE_TOOLS.includes(state.tool)) setTool('select');
+  if (lastWriteState !== null && lastWriteState !== can) {
+    flash(can ? 'Vous pouvez de nouveau écrire sur le tableau' : 'Le leader a passé le tableau en lecture seule pour vous', 5000);
+  }
+  lastWriteState = can;
+  renderUsers();
+}
 
 // ---------------------------------------------------------------------------
 // Curseurs et participants
@@ -1845,15 +1947,82 @@ function renderUsers() {
   head.className = 'room';
   head.append('Salle ', Object.assign(document.createElement('code'), { textContent: ROOM }));
   ul.appendChild(head);
-  for (const u of list) {
+  const a = state.access;
+  const rows = [{ ...list[0], uid: me.uid }, ...peerIds().map((p) => ({ ...userOf(p), uid: uidOfPeer(p) })), ...relayOnlyPeers().map((rid) => ({ ...userOf('r:' + rid), uid: relay.peers.get(rid)?.uid || '' }))];
+  for (const u of rows) {
     const li = document.createElement('li');
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.background = u.color;
-    li.append(dot, document.createTextNode(u.name + (u.self ? ' (moi)' : u.viaRelay ? ' (via relais)' : '')));
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = u.name + (u.self ? ' (moi)' : u.viaRelay ? ' (via relais)' : '');
+    li.append(dot, name);
+    const leaderHere = a && a.leader && u.uid === a.leader;
+    if (leaderHere) li.insertAdjacentHTML('beforeend', '<span class="badge leader" title="Leader de la salle">' + ICONS.crown + '</span>');
+    else if (a && a.mode === 'restricted') {
+      const w = canWrite(u.uid);
+      if (isLeader() && u.uid) {
+        const b = document.createElement('button');
+        b.className = 'badge toggle' + (w ? ' on' : '');
+        b.title = w ? 'Peut écrire : cliquer pour passer en lecture seule' : 'Lecture seule : cliquer pour autoriser l’écriture';
+        b.innerHTML = w ? ICONS.pencil : ICONS.eye;
+        b.addEventListener('click', (ev) => { ev.stopPropagation(); leaderUpdate({ writers: { [u.uid]: !w }, names: { [u.uid]: u.name } }); });
+        li.appendChild(b);
+      } else {
+        li.insertAdjacentHTML('beforeend', `<span class="badge ${w ? 'on' : ''}" title="${w ? 'Peut écrire' : 'Lecture seule'}">${w ? ICONS.pencil : ICONS.eye}</span>`);
+      }
+    }
+    if (isLeader() && !u.self && u.uid) {
+      const t = document.createElement('button');
+      t.className = 'badge ghost';
+      t.title = 'Transférer le rôle de leader';
+      t.innerHTML = ICONS.crown;
+      t.addEventListener('click', (ev) => { ev.stopPropagation(); if (confirm(`Faire de ${u.name} le leader de la salle ?`)) leaderUpdate({ leader: u.uid, names: { [u.uid]: u.name }, writers: { [me.uid]: true } }); }); // l'ancien leader garde l'écriture
+      li.appendChild(t);
+    }
     ul.appendChild(li);
   }
+  const foot = document.createElement('li');
+  foot.className = 'foot';
+  if (isLeader()) {
+    const restricted = a.mode === 'restricted';
+    const b = document.createElement('button');
+    b.className = 'text';
+    b.innerHTML = (restricted ? ICONS.lock : ICONS.lockOpen) + '<span>' + (restricted ? 'Écriture : autorisés seulement' : 'Écriture : tout le monde') + '</span>';
+    b.title = 'Changer le mode d’écriture de la salle';
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); leaderUpdate({ mode: restricted ? 'open' : 'restricted' }); });
+    foot.appendChild(b);
+  } else if (a && a.leader) {
+    const leaderName = a.names?.[a.leader] || 'un autre participant';
+    const info = document.createElement('span');
+    info.className = 'muted';
+    info.textContent = (a.mode === 'restricted' ? 'Écriture sur autorisation · ' : 'Écriture libre · ') + 'leader : ' + leaderName;
+    foot.appendChild(info);
+    if (!leaderPresent()) {
+      const b = document.createElement('button');
+      b.className = 'text';
+      b.innerHTML = ICONS.crown + '<span>Prendre la main</span>';
+      b.title = 'Le leader est absent : devenir leader';
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); claimLeader(); });
+      foot.appendChild(b);
+    }
+  } else {
+    const b = document.createElement('button');
+    b.className = 'text';
+    b.innerHTML = ICONS.crown + '<span>Devenir leader</span>';
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); claimLeader(); });
+    foot.appendChild(b);
+  }
+  ul.appendChild(foot);
 }
+const ICONS = {
+  crown: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z\" /><path d=\"M5 21h14\" /></svg>",
+  eye: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\" /><circle cx=\"12\" cy=\"12\" r=\"3\" /></svg>",
+  pencil: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\" /><path d=\"m15 5 4 4\" /></svg>",
+  lock: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /><path d=\"M7 11V7a5 5 0 0 1 10 0v4\" /></svg>",
+  lockOpen: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /><path d=\"M7 11V7a5 5 0 0 1 9.9-1\" /></svg>",
+};
 $('#users').addEventListener('click', (ev) => {
   ev.stopPropagation();
   const ul = $('#users-list');
@@ -1885,6 +2054,7 @@ function loadMhchem() {
 
 // Applique un préambule : renvoie { error, unsupported }.
 function applyPreamble(text, { broadcast = true, save = true } = {}) {
+  if (broadcast && !iCanWrite()) { flash('Lecture seule : seuls les participants autorisés modifient le préambule'); return { error: null, unsupported: [] }; }
   state.preamble = text;
   const { body, packages } = normalizePreamble(text);
   const unsupported = [];
@@ -2016,7 +2186,7 @@ function base64ToBuf(b64) {
 
 async function saveSession() {
   const objects = sortedObjects();
-  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), preamble: state.preamble, objects, files: {} };
+  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), preamble: state.preamble, access: state.access, objects, files: {} };
   for (const o of objects) {
     if (isRect(o) && files.has(o.fileId) && !data.files[o.fileId]) data.files[o.fileId] = bufToBase64(files.get(o.fileId));
   }
@@ -2030,6 +2200,7 @@ async function openSession(file) {
   for (const [id, b64] of Object.entries(data.files || {})) {
     if (!files.has(id)) storeFile(id, base64ToBuf(b64));
   }
+  if (data.access && data.access.leader && !state.access) setAccess(data.access);
   const objs = data.objects.filter((o) => o && typeof o.id === 'string' && !state.objects.has(o.id));
   if (objs.length) applyOp({ t: 'add', objs });
   let note = '';
@@ -2351,6 +2522,7 @@ $('#btn-zoom-out').addEventListener('click', () => zoomAt(canvas.clientWidth / 2
 $('#btn-zoom-fit').addEventListener('click', fitView);
 $('#btn-clear').addEventListener('click', () => {
   if (!state.objects.size) return;
+  if (!iCanWrite()) { flash('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
   if (!confirm('Effacer tout le tableau pour tout le monde ?')) return;
   const objs = [...state.objects.values()];
   for (const obj of objs) state.tombstones.set(obj.id, Date.now());
@@ -2489,4 +2661,4 @@ connect();
 loadLocal().then(() => fitView());
 
 // Accès à l'état pour le débogage et les tests.
-window.tableaublanc = { state, files, get room() { return room; }, reconcileAll, relay };
+window.tableaublanc = { state, files, get room() { return room; }, reconcileAll, relay, me, claimLeader, leaderUpdate, iCanWrite };

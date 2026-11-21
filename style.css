@@ -284,7 +284,25 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
   z-index: 6;
   font-size: 14px;
 }
+#users-list { min-width: 240px; }
 #users-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+#users-list .name { flex: 1; }
+#users-list .badge {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: inline-grid; place-items: center;
+  color: var(--muted); padding: 0;
+}
+#users-list .badge svg { width: 15px; height: 15px; }
+#users-list .badge.leader { color: #d97706; }
+#users-list .badge.on { color: var(--accent); }
+#users-list .badge.toggle { background: #f1f3f6; }
+#users-list .badge.toggle:hover { background: var(--accent-soft); }
+#users-list .badge.ghost { opacity: .35; }
+#users-list .badge.ghost:hover { opacity: 1; color: #d97706; background: #fef3c7; }
+#users-list li.foot { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 8px; font-size: 12px; flex-wrap: wrap; gap: 6px; }
+#users-list li.foot button.text { height: 32px; padding: 0 10px; font-size: 12px; }
+.tool.disabled { opacity: .35; pointer-events: none; }
+body.readonly #board { cursor: not-allowed; }
 #users-list li.room { color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border); margin-bottom: 4px; padding-bottom: 8px; }
 #users-list li.room code { font-size: 13px; color: var(--text); background: #f1f3f6; padding: 1px 6px; border-radius: 4px; }
 #users-list .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
