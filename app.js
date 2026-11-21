@@ -843,8 +843,10 @@ function segDist(px, py, ax, ay, bx, by) {
 
 // Ordre de rendu : PDF en dessous, puis traits, puis textes.
 const Z = { pdf: 0, image: 0.5, stroke: 1, text: 2 };
+// Profondeur d'un objet : z explicite (menu contextuel), sinon son type puis sa date de création.
+function zOf(o) { return o.z ?? (Z[o.type] * 1e13 + (o.ts || 0)); }
 function sortedObjects() {
-  return [...state.objects.values()].sort((a, b) => (Z[a.type] - Z[b.type]) || ((a.ts || 0) - (b.ts || 0)));
+  return [...state.objects.values()].sort((a, b) => zOf(a) - zOf(b));
 }
 
 function hitTest(wx, wy, tol = 6 / state.view.scale) {
@@ -910,6 +912,14 @@ function render() {
 
   for (const el of [...overlay.children]) {
     if (!seen.has(el.dataset.id)) el.remove();
+  }
+  // Les textes (DOM) suivent l'ordre de profondeur entre eux
+  let idx = 0;
+  for (const obj of sortedObjects()) {
+    if (obj.type !== 'text') continue;
+    const el = overlay.querySelector(`[data-id="${obj.id}"]`);
+    if (el && overlay.children[idx] !== el) overlay.insertBefore(el, overlay.children[idx] || null);
+    idx++;
   }
 
   overlay.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
@@ -1492,6 +1502,127 @@ $('#sel-del').addEventListener('click', deleteSelection);
 $('#sel-dup').addEventListener('click', duplicateSelection);
 
 // ---------------------------------------------------------------------------
+// Menu contextuel de la sélection (clic droit, appui long, bouton ⋯)
+// ---------------------------------------------------------------------------
+const ctxmenu = $('#ctxmenu');
+
+// Déplace la sélection dans l'ordre de superposition : 'front' | 'back' | 'forward' | 'backward'.
+function reorderSelection(mode) {
+  const sel = selectedObjects();
+  if (!sel.length || !iCanWrite()) return;
+  const all = sortedObjects();
+  const selIds = new Set(sel.map((o) => o.id));
+  const others = all.filter((o) => !selIds.has(o.id));
+  const group = all.filter((o) => selIds.has(o.id)); // dans l'ordre actuel
+  const n = group.length;
+  let newZ = null;
+  if (mode === 'front') {
+    const top = others.length ? zOf(others[others.length - 1]) : 0;
+    newZ = group.map((_, i) => top + 1 + i);
+  } else if (mode === 'back') {
+    const bottom = others.length ? zOf(others[0]) : 0;
+    newZ = group.map((_, i) => bottom - n + i);
+  } else if (mode === 'forward') {
+    const topSel = zOf(group[n - 1]);
+    const i = others.findIndex((o) => zOf(o) > topSel);
+    if (i < 0) return; // déjà au premier plan
+    const base = zOf(others[i]);
+    const next = i + 1 < others.length ? zOf(others[i + 1]) : base + 1;
+    newZ = group.map((_, k) => base + ((next - base) * (k + 1)) / (n + 1));
+  } else if (mode === 'backward') {
+    const bottomSel = zOf(group[0]);
+    let i = -1;
+    for (let k = others.length - 1; k >= 0; k--) if (zOf(others[k]) < bottomSel) { i = k; break; }
+    if (i < 0) return; // déjà à l'arrière-plan
+    const base = zOf(others[i]);
+    const low = i > 0 ? zOf(others[i - 1]) : base - 1;
+    newZ = group.map((_, k) => low + ((base - low) * (k + 1)) / (n + 1));
+  }
+  if (!newZ) return;
+  applyOp({ t: 'patch', items: group.map((o, k) => ({ id: o.id, before: { z: o.z ?? null }, after: { z: newZ[k] } })) });
+}
+
+function rotateSelection(angle) {
+  const sel = selectedObjects();
+  const b = selectionBounds();
+  if (!sel.length || !b || !iCanWrite()) return;
+  const before = new Map(sel.map((o) => [o.id, snapshot(o)]));
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  for (const o of sel) rotateObject(o, cx, cy, angle);
+  applyOp(patchOp(sel, before));
+}
+
+function straightenSelection() {
+  const sel = selectedObjects().filter((o) => o.type !== 'stroke' && (o.rot || 0) !== 0);
+  if (!sel.length || !iCanWrite()) return;
+  applyOp({ t: 'patch', items: sel.map((o) => ({ id: o.id, before: { rot: o.rot }, after: { rot: 0 } })) });
+}
+
+const CTX_ITEMS = [
+  { label: 'Avancer', icon: 'arrowUp', run: () => reorderSelection('forward') },
+  { label: 'Reculer', icon: 'arrowDown', run: () => reorderSelection('backward') },
+  { label: 'Mettre au premier plan', icon: 'front', run: () => reorderSelection('front') },
+  { label: 'Mettre à l’arrière-plan', icon: 'back', run: () => reorderSelection('back') },
+  { sep: true },
+  { label: 'Pivoter de 90° à droite', icon: 'rotateCw', run: () => rotateSelection(Math.PI / 2) },
+  { label: 'Pivoter de 90° à gauche', icon: 'rotateCcw', run: () => rotateSelection(-Math.PI / 2) },
+  { label: 'Remettre droit', icon: 'reset', run: straightenSelection, when: () => selectedObjects().some((o) => o.type !== 'stroke' && (o.rot || 0) !== 0) },
+  { sep: true },
+  { label: 'Dupliquer', icon: 'copy', run: duplicateSelection },
+  { label: 'Supprimer', icon: 'trash', danger: true, run: deleteSelection },
+];
+
+function openContextMenu(x, y) {
+  if (!selectedObjects().length) return;
+  ctxmenu.replaceChildren();
+  for (const it of CTX_ITEMS) {
+    if (it.sep) { ctxmenu.appendChild(Object.assign(document.createElement('span'), { className: 'sep' })); continue; }
+    if (it.when && !it.when()) continue;
+    const b = document.createElement('button');
+    b.className = it.danger ? 'danger' : '';
+    b.innerHTML = CTX_ICONS[it.icon] + '<span>' + it.label + '</span>';
+    b.addEventListener('click', () => { closeContextMenu(); it.run(); });
+    ctxmenu.appendChild(b);
+  }
+  ctxmenu.hidden = false;
+  const w = ctxmenu.offsetWidth, h = ctxmenu.offsetHeight;
+  ctxmenu.style.left = clamp(x, 8, window.innerWidth - w - 8) + 'px';
+  ctxmenu.style.top = clamp(y, 8, window.innerHeight - h - 8) + 'px';
+}
+function closeContextMenu() { ctxmenu.hidden = true; }
+window.addEventListener('pointerdown', (ev) => { if (!ctxmenu.hidden && !ev.target.closest('#ctxmenu')) closeContextMenu(); });
+window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeContextMenu(); });
+ctxmenu.addEventListener('contextmenu', (ev) => ev.preventDefault());
+
+canvas.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  const [wx, wy] = toWorld(ev.clientX, ev.clientY);
+  if (!insideBounds(selectionBounds(), wx, wy)) {
+    const hit = hitTest(wx, wy);
+    if (!hit) { closeContextMenu(); return; }
+    if (state.tool !== 'select' && state.tool !== 'lasso') setTool('select');
+    setSelection([hit.id]);
+  }
+  openContextMenu(ev.clientX, ev.clientY);
+});
+$('#sel-more').addEventListener('click', (ev) => {
+  const r = ev.currentTarget.getBoundingClientRect();
+  openContextMenu(r.left, r.bottom + 6);
+});
+
+const CTX_ICONS = {
+  arrowUp: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m5 12 7-7 7 7\" /><path d=\"M12 19V5\" /></svg>",
+  arrowDown: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 5v14\" /><path d=\"m19 12-7 7-7-7\" /></svg>",
+  front: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" rx=\"2\" /><path d=\"M4 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2\" /><path d=\"M14 20a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2\" /></svg>",
+  back: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"14\" y=\"14\" width=\"8\" height=\"8\" rx=\"2\" /><rect x=\"2\" y=\"2\" width=\"8\" height=\"8\" rx=\"2\" /><path d=\"M7 14v1a2 2 0 0 0 2 2h1\" /><path d=\"M14 7h1a2 2 0 0 1 2 2v1\" /></svg>",
+  rotateCw: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\" /><path d=\"M21 3v5h-5\" /></svg>",
+  rotateCcw: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /></svg>",
+  reset: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /><path d=\"M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16\" /><path d=\"M16 16h5v5\" /></svg>",
+  copy: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\" /><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\" /></svg>",
+  trash: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M10 11v6\" /><path d=\"M14 11v6\" /><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\" /><path d=\"M3 6h18\" /><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\" /></svg>",
+};
+
+// ---------------------------------------------------------------------------
 // Pointeur (souris, doigt, stylet)
 // ---------------------------------------------------------------------------
 let currentStroke = null;
@@ -1503,6 +1634,11 @@ let penDown = false;
 let lastDraftSent = 0;
 let lastCursorSent = 0;
 let lastLiveSent = 0;
+let longPress = null; // { timer, x, y }
+
+function cancelLongPress() {
+  if (longPress) { clearTimeout(longPress.timer); longPress = null; }
+}
 
 function effectiveTool(ev) {
   if (spaceDown || ev.button === 1) return 'hand';
@@ -1569,6 +1705,20 @@ canvas.addEventListener('pointerdown', (ev) => {
     return;
   }
 
+  if ((tool === 'select' || tool === 'lasso') && touch) {
+    // Appui long sur un objet : menu contextuel
+    const target = insideBounds(selectionBounds(), wx, wy) ? null : hitTest(wx, wy, tolPx / state.view.scale);
+    if (target || insideBounds(selectionBounds(), wx, wy)) {
+      longPress = { x: ev.clientX, y: ev.clientY, timer: setTimeout(() => {
+        longPress = null;
+        if (drag && drag.before) for (const o of drag.objs) restore(o, drag.before.get(o.id));
+        drag = null;
+        if (target) setSelection([target.id]);
+        openContextMenu(ev.clientX, ev.clientY);
+        requestRender();
+      }, 550) };
+    }
+  }
   if (tool === 'select' || tool === 'lasso') {
     const sel = selectedObjects();
     if (sel.length && iCanWrite()) {
@@ -1613,6 +1763,7 @@ canvas.addEventListener('pointerdown', (ev) => {
 
 canvas.addEventListener('pointermove', (ev) => {
   if (ev.pointerType === 'touch' && penDown) return;
+  if (longPress && Math.hypot(ev.clientX - longPress.x, ev.clientY - longPress.y) > 8) cancelLongPress();
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
@@ -1717,6 +1868,7 @@ canvas.addEventListener('pointermove', (ev) => {
 });
 
 function endPointer(ev) {
+  cancelLongPress();
   if (ev.pointerType === 'pen') penDown = false;
   if (!pointers.has(ev.pointerId)) return;
   pointers.delete(ev.pointerId);
@@ -2399,11 +2551,11 @@ async function exportPdf() {
     for (const t of [...images, ...texts]) {
       if (!placed.has(t.id) && inside(t.x, t.y)) { items.push(t); placed.add(t.id); }
     }
-    items.sort((a, b) => Z[a.type] - Z[b.type]);
+    items.sort((a, b) => zOf(a) - zOf(b));
     await drawOn(page, items, toPt, k, r);
   }
 
-  const rest = [...images, ...strokes, ...texts].filter((o) => !placed.has(o.id));
+  const rest = [...images, ...strokes, ...texts].filter((o) => !placed.has(o.id)).sort((a, b) => zOf(a) - zOf(b));
   if (rest.length || !out.getPageCount()) {
     const b = unionBounds(rest) || { x: 0, y: 0, w: 800, h: 600 };
     const pad = 40;

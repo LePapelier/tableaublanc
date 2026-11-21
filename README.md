@@ -61,6 +61,7 @@ Puis ouvrez <http://localhost:3000>. Une salle est créée automatiquement ; le 
 | --- | --- |
 | `V` | Sélection : clic ou cadre rectangulaire ; glisser pour déplacer, coins pour redimensionner, poignée du haut pour tourner (`Maj` : pas de 15°), `Suppr` pour effacer, double-clic pour un texte |
 | `L` | Lasso : entourer à main levée les traits à sélectionner (`Maj` : ajouter à la sélection) |
+| Clic droit, appui long ou bouton « ⋯ » sur la sélection | Menu contextuel : avancer, reculer, premier plan, arrière-plan, pivoter de 90°, remettre droit, dupliquer, supprimer |
 | `Ctrl+A` / `Ctrl+D` | Tout sélectionner / dupliquer la sélection |
 | `P` ou `C` | Crayon |
 | `H` | Surligneur |
