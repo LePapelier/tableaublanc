@@ -143,7 +143,6 @@ function connect() {
     setStatus('Mode hors ligne : ' + err.message, 'warn');
     return;
   }
-  setStatus('Recherche de participants…');
 
   actions = {
     op: room.makeAction('op'),
@@ -156,8 +155,7 @@ function connect() {
   profile.set({ name: me.name, color: me.color }).catch(() => {});
 
   room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); });
-  room.ready.then(() => { if (!peerIds().length) setStatus('Personne d’autre pour l’instant : partagez le lien de la salle'); })
-    .catch((err) => setStatus('Relais injoignable : ' + err.message, 'warn'));
+  room.ready.catch((err) => setStatus('Relais injoignable : ' + err.message, 'warn'));
   room.onError((err) => {
     if (err.code === 'relay-failed') setStatus('Relais de mise en relation injoignable', 'warn');
   });
@@ -186,7 +184,6 @@ function connect() {
     peerUsers.delete(peerId);
     cursorsEl.querySelector(`[data-user="${peerId}"]`)?.remove();
     state.drafts.delete(peerId);
-    if (!peerIds().length) setStatus('Personne d’autre pour l’instant : partagez le lien de la salle');
     renderUsers();
     requestRender();
   });
@@ -576,7 +573,7 @@ function render() {
   cursorsEl.style.transform = overlay.style.transform;
   for (const c of cursorsEl.children) c.style.transform = `translate(${c.dataset.x}px, ${c.dataset.y}px) scale(${1 / scale})`;
   updateSelectionBox();
-  $('#btn-zoom-fit').textContent = Math.round(scale * 100) + ' %';
+  $('#btn-zoom-fit .zoom-value').textContent = Math.round(scale * 100) + ' %';
 }
 
 function drawLasso(pts) {
@@ -1904,11 +1901,11 @@ $('#btn-clear').addEventListener('click', () => {
 $('#btn-share').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(location.href);
-    $('#btn-share').textContent = 'Lien copié !';
+    $('#btn-share span').textContent = 'Lien copié !';
   } catch (_) {
     prompt('Lien de la salle :', location.href);
   }
-  setTimeout(() => ($('#btn-share').textContent = 'Partager'), 1800);
+  setTimeout(() => ($('#btn-share span').textContent = 'Partager'), 1800);
 });
 $('#btn-name').addEventListener('click', () => {
   const name = prompt('Votre nom :', me.name);
@@ -1919,7 +1916,6 @@ $('#btn-name').addEventListener('click', () => {
     renderUsers();
   }
 });
-$('#room-label').textContent = 'salle ' + ROOM;
 
 const menu = $('#menu');
 $('#btn-menu').addEventListener('click', (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; });

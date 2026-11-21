@@ -28,15 +28,11 @@
 
   <header id="topbar">
     <div class="group">
-      <strong class="brand">Tableau blanc</strong>
-      <span id="room-label" class="muted"></span>
-    </div>
-    <div class="group">
       <button id="btn-undo" class="icon" title="Annuler (Ctrl+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /></svg></button>
       <button id="btn-redo" class="icon" title="Rétablir (Ctrl+Y)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" /></svg></button>
       <span class="sep"></span>
       <button id="btn-zoom-out" class="icon" title="Zoom arrière"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8" /><line x1="21" x2="16.65" y1="21" y2="16.65" /><line x1="8" x2="14" y1="11" y2="11" /></svg></button>
-      <button id="btn-zoom-fit" class="text" title="Tout afficher">100 %</button>
+      <button id="btn-zoom-fit" class="text" title="Recadrer sur tout le tableau"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg><span class="zoom-value">100 %</span></button>
       <button id="btn-zoom-in" class="icon" title="Zoom avant"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8" /><line x1="21" x2="16.65" y1="21" y2="16.65" /><line x1="11" x2="11" y1="8" y2="14" /><line x1="8" x2="14" y1="11" y2="11" /></svg></button>
       <span class="sep"></span>
       <button id="btn-clear" class="text danger" title="Effacer tout le tableau"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg><span>Tout effacer</span></button>
@@ -45,7 +41,7 @@
       <div id="users" title="Participants"></div>
       <ul id="users-list" hidden></ul>
       <button id="btn-name" class="text" title="Changer de nom">Moi</button>
-      <button id="btn-share" class="text primary" title="Copier le lien de la salle"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><line x1="8.59" x2="15.42" y1="13.51" y2="17.49" /><line x1="15.41" x2="8.59" y1="6.51" y2="10.49" /></svg><span>Partager</span></button>
+      <button id="btn-share" class="text primary" title="Copier le lien de la salle"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /><path d="M16 4h2a2 2 0 0 1 2 2v4" /><path d="M21 14H11" /><path d="m15 10-4 4 4 4" /></svg><span>Partager</span></button>
       <button id="btn-menu" class="icon" title="Menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></svg></button>
     </div>
     <div id="menu" hidden>
