@@ -2181,7 +2181,7 @@ function renderUsers() {
     foot.appendChild(seg);
   } else if (a && a.leader) {
     const leaderName = a.names?.[a.leader] || 'un autre participant';
-    foot.innerHTML = `<span class="label">Écriture</span><span class="muted">${a.mode === 'restricted' ? 'sur autorisation' : 'libre'} · leader : ${escapeHtml(leaderName)}</span>`;
+    foot.innerHTML = `<span class="label">Leader</span><span class="muted">${escapeHtml(leaderName)}${a.mode === 'restricted' ? '' : ' · écriture libre'}</span>`;
     if (!leaderPresent()) {
       const b = document.createElement('button');
       b.className = 'text wide';
