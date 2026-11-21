@@ -29,6 +29,15 @@ const ROOM = (() => {
   return room;
 })();
 const RELAYS = PAGE_URL.searchParams.get('relay'); // relais Nostr personnalisés, séparés par des virgules
+// Serveurs TURN : indispensables quand les deux réseaux interdisent la connexion directe (4G, box stricte,
+// réseau d'entreprise). Par défaut : le service public gratuit Open Relay ; remplaçable via ?turn=…&turnuser=…&turnpass=…
+const TURN_SERVERS = PAGE_URL.searchParams.get('turn')
+  ? [{ urls: PAGE_URL.searchParams.get('turn').split(','), username: PAGE_URL.searchParams.get('turnuser') || '', credential: PAGE_URL.searchParams.get('turnpass') || '' }]
+  : [{
+    urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp', 'turns:openrelay.metered.ca:443?transport=tcp'],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  }];
 
 const me = {
   name: localStorage.getItem('wb-name') || NAMES[Math.floor(Math.random() * NAMES.length)],
@@ -138,8 +147,24 @@ function peerIds() {
   return room ? Object.keys(room.getPeers()) : [];
 }
 
+// Indicateur de connexion : pastille à côté des participants.
+const net = { relay: 'connecting', peers: 0, lastError: '' };
+function renderNetStatus() {
+  const dot = $('#net-dot');
+  if (!dot) return;
+  let cls = 'connecting', title = 'Connexion aux relais de mise en relation…';
+  if (net.relay === 'error') { cls = 'error'; title = 'Relais injoignable : ' + net.lastError; }
+  else if (net.relay === 'offline') { cls = 'error'; title = 'Hors ligne'; }
+  else if (net.peers > 0) { cls = 'online'; title = `En ligne · ${net.peers} autre(s) participant(s)`; }
+  else if (net.relay === 'ready') { cls = 'ready'; title = 'Prêt : personne d’autre dans la salle pour l’instant. Partagez le lien.'; }
+  if (net.lastError && cls === 'online') title += ' · ' + net.lastError;
+  dot.className = cls;
+  dot.title = title;
+  $('#users').title = title;
+}
+
 function connect() {
-  const config = { appId: APP_ID, identity: 'none' };
+  const config = { appId: APP_ID, identity: 'none', turnConfig: TURN_SERVERS };
   if (RELAYS) config.relayConfig = { urls: RELAYS.split(',').map((s) => s.trim()).filter(Boolean) };
   try {
     room = joinRoom(config, ROOM);
@@ -166,10 +191,25 @@ function connect() {
   });
 
   room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); });
-  room.ready.catch((err) => setStatus('Relais injoignable : ' + err.message, 'warn'));
+  room.ready.then(() => { net.relay = 'ready'; renderNetStatus(); })
+    .catch((err) => { net.relay = 'error'; net.lastError = err.message; renderNetStatus(); setStatus('Relais de mise en relation injoignable : ' + err.message, 'warn'); });
   room.onError((err) => {
-    if (err.code === 'relay-failed') setStatus('Relais de mise en relation injoignable', 'warn');
+    console.warn('Trystero :', err.code, err.message);
+    if (err.code === 'relay-failed') {
+      net.relay = 'error'; net.lastError = err.message; renderNetStatus();
+      setStatus('Relais de mise en relation injoignable. Réseau filtré ? Réessayez ou passez un relais via ?relay=…', 'warn');
+    } else if (err.code === 'peer-connect-failed') {
+      net.lastError = 'connexion directe impossible avec un participant' + (err.turnConfigured ? '' : ' (pas de TURN)');
+      renderNetStatus();
+      setStatus('Connexion impossible avec un participant : son réseau ou le vôtre bloque WebRTC, même via TURN.', 'warn');
+      setTimeout(() => setStatus(''), 8000);
+    } else if (err.code === 'peer-error' || err.code === 'handshake-failed') {
+      net.lastError = err.message; renderNetStatus();
+    }
   });
+  window.addEventListener('online', () => { net.relay = 'connecting'; renderNetStatus(); });
+  window.addEventListener('offline', () => { net.relay = 'offline'; renderNetStatus(); });
+  renderNetStatus();
 
   actions.op.onMessage((msg, { peerId }) => handleOp(msg, peerId));
   actions.draft.onMessage((msg, { peerId }) => {
@@ -188,6 +228,7 @@ function connect() {
   room.onPeerJoin(({ peerId, userId }) => {
     peerUsers.set(peerId, userId);
     setStatus('');
+    net.peers = peerIds().length; net.lastError = ''; renderNetStatus();
     renderUsers();
     syncFrom(peerId);
     // Un préambule local jamais publié (salle rouverte seul) est partagé au premier arrivant.
@@ -197,6 +238,7 @@ function connect() {
     peerUsers.delete(peerId);
     cursorsEl.querySelector(`[data-user="${peerId}"]`)?.remove();
     state.drafts.delete(peerId);
+    net.peers = peerIds().length; renderNetStatus();
     renderUsers();
     requestRender();
   });

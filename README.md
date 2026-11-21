@@ -22,6 +22,15 @@ Conséquences à connaître :
 - Une personne qui rejoint une salle vide (aucun autre onglet ouvert et rien en local) voit un tableau vide jusqu'à ce qu'un participant qui a le contenu se reconnecte.
 - Derrière certains pare-feux d'entreprise, WebRTC peut échouer sans serveur TURN. Un message l'indique en haut de l'écran.
 
+### Si la collaboration ne s'établit pas
+
+La pastille à gauche des avatars indique l'état : orange clignotant = connexion aux relais, bleu = prêt mais seul dans la salle, vert = au moins un autre participant connecté, rouge = relais injoignable (survolez-la pour le détail).
+
+- **Vérifiez que l'URL est identique** des deux côtés, paramètre `room` compris : c'est lui qui désigne la salle.
+- **Connexion directe impossible** (téléphone en 4G, réseau d'entreprise, box stricte) : l'application passe automatiquement par des serveurs TURN publics gratuits (Open Relay). Vous pouvez indiquer le vôtre : `?turn=turn:hote:3478&turnuser=…&turnpass=…`.
+- **Relais injoignable** (pastille rouge) : le réseau filtre les WebSockets vers les relais Nostr publics. Essayez un autre réseau, ou passez vos propres relais : `?relay=wss://relay1,wss://relay2`.
+- Les deux personnes doivent avoir l'onglet ouvert en même temps au moins une fois pour que le contenu se transmette ; ensuite chacun garde une copie locale.
+
 Si vous préférez un relais de mise en relation privé, lancez `npm run relay` (un mini relais Nostr, `tools/relay.js`) et ouvrez l'application avec `?relay=ws://votre-hote:4444`. Plusieurs relais se séparent par des virgules.
 
 ## Déployer sur GitHub Pages
