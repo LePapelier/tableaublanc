@@ -1346,7 +1346,7 @@ function updateSelectionBox() {
   selectionEl.style.width = w + 8 + 'px';
   selectionEl.style.height = h + 8 + 'px';
   // Barre d'actions au-dessus de la sélection (ou en dessous si pas la place)
-  selbar.hidden = !!drag && drag.kind !== 'none';
+  selbar.hidden = (!!drag && drag.kind !== 'none') || !ctxmenu.hidden;
   const bw = selbar.offsetWidth || 160, bh = selbar.offsetHeight || 46;
   const handleTop = sy - 4 - (matchMedia('(pointer: coarse)').matches ? 40 : 30); // haut de la poignée de rotation
   const above = handleTop - 8 - bh;
@@ -1586,11 +1586,16 @@ function openContextMenu(x, y) {
     ctxmenu.appendChild(b);
   }
   ctxmenu.hidden = false;
+  selbar.hidden = true; // le menu reprend déjà Dupliquer / Supprimer
   const w = ctxmenu.offsetWidth, h = ctxmenu.offsetHeight;
   ctxmenu.style.left = clamp(x, 8, window.innerWidth - w - 8) + 'px';
   ctxmenu.style.top = clamp(y, 8, window.innerHeight - h - 8) + 'px';
 }
-function closeContextMenu() { ctxmenu.hidden = true; }
+function closeContextMenu() {
+  if (ctxmenu.hidden) return;
+  ctxmenu.hidden = true;
+  updateSelectionBox(); // réaffiche la barre de sélection s'il y a lieu
+}
 window.addEventListener('pointerdown', (ev) => { if (!ctxmenu.hidden && !ev.target.closest('#ctxmenu')) closeContextMenu(); });
 window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeContextMenu(); });
 ctxmenu.addEventListener('contextmenu', (ev) => ev.preventDefault());
