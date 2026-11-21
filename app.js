@@ -492,9 +492,11 @@ function toScreen(wx, wy) {
   return [wx * scale + tx, wy * scale + ty];
 }
 
+// Zoom maximal : 4× au doigt (au-delà, on se perd), 6× à la souris.
+const MAX_ZOOM = matchMedia('(pointer: coarse)').matches ? 4 : 6;
 function zoomAt(sx, sy, factor) {
   const v = state.view;
-  const newScale = clamp(v.scale * factor, 0.1, 8);
+  const newScale = clamp(v.scale * factor, 0.1, MAX_ZOOM);
   const f = newScale / v.scale;
   v.tx = sx - (sx - v.tx) * f;
   v.ty = sy - (sy - v.ty) * f;

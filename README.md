@@ -30,6 +30,7 @@ La pastille à gauche des avatars indique l'état : orange clignotant = connexio
 - **Connexion directe impossible** (téléphone en 4G, réseau d'entreprise, box stricte) : l'application passe automatiquement par des serveurs TURN publics gratuits (Open Relay). Vous pouvez indiquer le vôtre : `?turn=turn:hote:3478&turnuser=…&turnpass=…`.
 - **Relais injoignable** (pastille rouge) : le réseau filtre les WebSockets vers les relais Nostr publics. Essayez un autre réseau, ou passez vos propres relais : `?relay=wss://relay1,wss://relay2`.
 - Les deux personnes doivent avoir l'onglet ouvert en même temps au moins une fois pour que le contenu se transmette ; ensuite chacun garde une copie locale.
+- **Safari** gèle l'onglet en arrière-plan et au verrouillage de l'écran : au retour, l'application réconcilie automatiquement son contenu avec les participants (toutes les 45 s aussi, par précaution). Sur Mac, le pincement du trackpad zoome le tableau.
 
 Si vous préférez un relais de mise en relation privé, lancez `npm run relay` (un mini relais Nostr, `tools/relay.js`) et ouvrez l'application avec `?relay=ws://votre-hote:4444`. Plusieurs relais se séparent par des virgules.
 
@@ -51,7 +52,7 @@ Il suffit d'un serveur de fichiers statiques (les modules ES ne se chargent pas 
 npm start
 ```
 
-Puis ouvrez <http://localhost:3000>. Pour tester à deux sur la même machine, ouvrez le même lien dans une fenêtre de navigation privée.
+Puis ouvrez <http://localhost:3000>. Une salle est créée automatiquement ; le bouton **Partager** copie son lien. Le menu « ⋯ » permet de créer une **nouvelle salle** ou d'en **rejoindre** une par son code ou son lien ; le code de la salle courante s'affiche en tête de la liste des participants. Pour tester à deux sur la même machine, ouvrez le même lien dans une fenêtre de navigation privée.
 
 ## Raccourcis
 
