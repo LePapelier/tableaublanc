@@ -455,3 +455,32 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
   #editor { width: min(360px, calc(100vw - 24px)); }
 }
 
+
+/* ----- Préambule LaTeX ----- */
+#preamble-dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  width: min(560px, calc(100vw - 32px));
+  box-shadow: var(--shadow);
+  color: var(--text);
+  background: white;
+}
+#preamble-dialog::backdrop { background: rgba(15, 23, 42, .25); }
+#preamble-dialog h3 { margin: 0 0 8px; font-size: 16px; }
+#preamble-dialog p { margin: 0 0 10px; line-height: 1.4; }
+#preamble-dialog code { font-size: 12px; background: #f1f3f6; padding: 1px 4px; border-radius: 4px; }
+#preamble-text {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+#preamble-text:focus { border-color: var(--accent); }
+#preamble-status { min-height: 18px; margin: 8px 0; white-space: pre-wrap; }
+#preamble-status.error { color: var(--danger); }
+#preamble-dialog .actions { display: flex; justify-content: flex-end; gap: 6px; }

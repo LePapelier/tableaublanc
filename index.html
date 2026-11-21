@@ -47,6 +47,7 @@
     <div id="menu" hidden>
       <button data-action="#btn-save"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" /></svg>Enregistrer la session</button>
       <button data-action="#btn-open"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>Ouvrir une session…</button>
+      <button data-action="#btn-preamble"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1" /><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" /></svg>Préambule LaTeX…</button>
       <button data-action="#btn-export-pdf"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M12 18v-6" /><path d="m9 15 3 3 3-3" /></svg>Exporter en PDF</button>
       <span class="sep compact-only"></span>
       <button data-action="#btn-name" class="compact-only"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.5 15H7a4 4 0 0 0-4 4v2" /><path d="M21.378 16.626a1 1 0 0 0-3.004-3.004l-4.01 4.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z" /><circle cx="10" cy="7" r="4" /></svg>Changer de nom</button>
@@ -54,6 +55,7 @@
       <button data-action="#btn-clear" class="danger compact-only"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>Tout effacer</button>
     </div>
     <button id="btn-save" hidden></button>
+    <button id="btn-preamble" hidden></button>
     <button id="btn-export-pdf" hidden></button>
     <label id="btn-open" hidden><input id="session-input" type="file" accept="application/json,.json"></label>
   </header>
@@ -79,6 +81,18 @@
       <div id="font-sizes" title="Taille du texte" hidden></div>
     </div>
   </nav>
+
+  <dialog id="preamble-dialog">
+    <h3>Préambule LaTeX</h3>
+    <p class="muted">Macros partagées avec toute la salle : <code>\newcommand</code>, <code>\def</code>, <code>\DeclareMathOperator</code>…
+      <code>\usepackage</code> est accepté pour les packages couverts par KaTeX ; <code>bussproofs</code> (<code>\begin{prooftree}</code>) et <code>mhchem</code> (<code>\ce</code>) sont émulés.</p>
+    <textarea id="preamble-text" spellcheck="false" placeholder="\newcommand{\R}{\mathbb{R}}&#10;\DeclareMathOperator{\Ker}{Ker}&#10;\usepackage{bussproofs}"></textarea>
+    <div id="preamble-status" class="muted"></div>
+    <div class="actions">
+      <button type="button" id="preamble-cancel" class="text">Annuler</button>
+      <button type="button" id="preamble-apply" class="text primary">Appliquer</button>
+    </div>
+  </dialog>
 
   <div id="hint" class="muted"></div>
   <div id="status" hidden></div>

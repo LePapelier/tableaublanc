@@ -19,6 +19,7 @@ fs.rmSync(out, { recursive: true, force: true });
 copy(path.join(nm, 'katex/dist/katex.min.css'), path.join(out, 'katex/katex.min.css'));
 copy(path.join(nm, 'katex/dist/katex.min.js'), path.join(out, 'katex/katex.min.js'));
 copy(path.join(nm, 'katex/dist/fonts'), path.join(out, 'katex/fonts'));
+copy(path.join(nm, 'katex/dist/contrib/mhchem.min.js'), path.join(out, 'katex/mhchem.min.js'));
 
 // pdf.js : bibliothèque et worker.
 copy(path.join(nm, 'pdfjs-dist/build/pdf.min.mjs'), path.join(out, 'pdfjs/pdf.min.mjs'));

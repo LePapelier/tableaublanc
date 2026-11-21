@@ -8,6 +8,7 @@ Petite application web de tableau blanc collaboratif, **sans aucun serveur à h�
 - Canevas infini (déplacement, zoom), **sélection** d'un ou plusieurs éléments (clic, cadre rectangulaire ou **lasso à main levée**) pour les déplacer, les redimensionner par les coins, les **faire tourner** par la poignée du haut, les dupliquer ou les supprimer, annuler/rétablir.
 - **Pensé pour le tactile** : dessin au doigt ou au stylet (rejet de la paume), pincement pour zoomer, barre d'outils en bas de l'écran sur téléphone, en portrait comme en paysage.
 - **Sauvegarde locale** : chaque navigateur conserve les salles qu'il a visitées (IndexedDB). En rouvrant le lien, vous retrouvez le tableau, et les autres participants connectés le complètent.
+- **Préambule LaTeX** (menu « ⋯ ») : macros partagées par la salle (`\newcommand`, `\def`, `\DeclareMathOperator`…), synchronisées entre participants et enregistrées avec la session. `\usepackage` est accepté pour les packages que KaTeX couvre déjà ; `bussproofs` (`\begin{prooftree}` … `\AxiomC`, `\BinaryInfC`, `\RightLabel`…) et `mhchem` (`\ce{}`) sont émulés. Les autres packages sont signalés comme non pris en charge.
 - **Enregistrer et rouvrir une session** (menu « ⋯ ») : un fichier `.json` autonome, PDF et images compris, à ouvrir plus tard dans n'importe quelle salle.
 - **Exporter en PDF** (menu « ⋯ ») : les pages PDF d'origine sont reprises telles quelles avec vos traits en vectoriel par-dessus, les formules et images incrustées ; tout ce qui est en dehors des pages va sur une page supplémentaire.
 
@@ -62,7 +63,7 @@ Sur téléphone ou tablette : un doigt dessine (ou sélectionne, avec l'outil fl
 
 ## Structure
 
-- `index.html`, `style.css`, `app.js` : toute l'application (rendu canvas, outils, édition LaTeX, PDF avec pdf.js, export avec pdf-lib, synchronisation pair-à-pair, stockage local). Icônes [Lucide](https://lucide.dev) en SVG inline.
+- `index.html`, `style.css`, `app.js` : toute l'application ; `latex-extras.mjs` : normalisation du préambule et traducteur bussproofs → fractions KaTeX (rendu canvas, outils, édition LaTeX, PDF avec pdf.js, export avec pdf-lib, synchronisation pair-à-pair, stockage local). Icônes [Lucide](https://lucide.dev) en SVG inline.
 - `vendor/` : KaTeX, pdf.js, pdf-lib et Trystero copiés depuis npm, pour que le site soit autonome. Régénérer avec `npm run vendor` après une mise à jour des dépendances.
 - `tools/relay.js` : relais Nostr minimal, optionnel, pour un usage privé ou les tests.
 - `.github/workflows/pages.yml` : déploiement GitHub Pages.

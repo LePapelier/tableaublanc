@@ -2,6 +2,7 @@
 // LaTeX (KaTeX), PDF (pdf.js), sauvegarde locale (IndexedDB).
 import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
 import { joinRoom } from './vendor/trystero.js';
+import { normalizePreamble, translateProoftrees, BUILTIN_PACKAGES, EMULATED_PACKAGES } from './latex-extras.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
 
@@ -50,6 +51,7 @@ const state = {
   width: 4,
   fontSize: 24,
   selected: new Set(), // ids sélectionnés
+  preamble: '', // préambule LaTeX partagé (macros)
   undo: [],
   redo: [],
 };
@@ -105,7 +107,7 @@ function scheduleSave() {
     saveTimer = null;
     const cutoff = Date.now() - 7 * 86400e3;
     for (const [id, t] of state.tombstones) if (t < cutoff) state.tombstones.delete(id);
-    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones] });
+    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble });
   }, 800);
 }
 
@@ -113,6 +115,7 @@ async function loadLocal() {
   const saved = await idbGet('rooms', ROOM);
   if (!saved) return;
   for (const [id, t] of saved.tombstones || []) state.tombstones.set(id, t);
+  if (saved.preamble) applyPreamble(saved.preamble, { broadcast: false, save: false });
   mergeObjects(saved.objects || [], null);
 }
 
@@ -122,6 +125,7 @@ async function loadLocal() {
 let room = null;
 let actions = null;
 let profile = null;
+let preambleState = null; // état partagé du préambule (synchronisé aux retardataires)
 const peerUsers = new Map(); // peerId -> userId
 
 function setStatus(text, kind = '') {
@@ -153,6 +157,13 @@ function connect() {
   };
   profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af' });
   profile.set({ name: me.name, color: me.color }).catch(() => {});
+  preambleState = room.makeState('preamble', '');
+  preambleState.onChange((value) => {
+    if (typeof value === 'string' && value !== state.preamble) {
+      applyPreamble(value, { broadcast: false });
+      if (preambleDialog.open) { $('#preamble-text').value = value; setPreambleStatus('Préambule mis à jour par un autre participant.'); }
+    }
+  });
 
   room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); });
   room.ready.catch((err) => setStatus('Relais injoignable : ' + err.message, 'warn'));
@@ -179,6 +190,8 @@ function connect() {
     setStatus('');
     renderUsers();
     syncFrom(peerId);
+    // Un préambule local jamais publié (salle rouverte seul) est partagé au premier arrivant.
+    if (state.preamble && preambleState && !preambleState.get()) preambleState.set(state.preamble).catch(() => {});
   });
   room.onPeerLeave(({ peerId }) => {
     peerUsers.delete(peerId);
@@ -839,13 +852,14 @@ async function insertPdfFile(file, wx, wy) {
 // ---------------------------------------------------------------------------
 function renderLatexHtml(text) {
   const parts = [];
-  const re = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
+  // $…$ et \begin{prooftree}…\end{prooftree} en mode bloc, $…$ en ligne.
+  const re = /\$\$([\s\S]+?)\$\$|(\\begin\{prooftree\}[\s\S]*?\\end\{prooftree\})|\$([^$\n]+?)\$/g;
   let last = 0, m;
   while ((m = re.exec(text))) {
     if (m.index > last) parts.push(escapeHtml(text.slice(last, m.index)));
-    const tex = m[1] ?? m[2];
+    const tex = translateProoftrees(m[1] ?? m[2] ?? m[3]);
     try {
-      parts.push(katex.renderToString(tex, { displayMode: m[1] !== undefined, throwOnError: false }));
+      parts.push(katex.renderToString(tex, { displayMode: m[3] === undefined, throwOnError: false, macros: katexMacros }));
     } catch (_) {
       parts.push(`<span style="color:#dc2626">${escapeHtml(m[0])}</span>`);
     }
@@ -867,7 +881,7 @@ function renderText(obj) {
     el.dataset.id = obj.id;
     overlay.appendChild(el);
   }
-  const sig = `${obj.text}|${obj.color}`;
+  const sig = `${obj.text}|${obj.color}|${preambleRev}`;
   if (el.dataset.sig !== sig) {
     el.dataset.sig = sig;
     el.innerHTML = renderLatexHtml(obj.text || '');
@@ -1532,6 +1546,82 @@ $('#users').addEventListener('click', (ev) => {
 window.addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#users, #users-list')) $('#users-list').hidden = true; });
 
 // ---------------------------------------------------------------------------
+// Préambule LaTeX (macros partagées)
+// ---------------------------------------------------------------------------
+let katexMacros = {};
+let preambleRev = 0;
+let mhchemLoading = null;
+const preambleDialog = $('#preamble-dialog');
+
+function loadMhchem() {
+  if (!mhchemLoading) {
+    mhchemLoading = new Promise((resolve) => {
+      const el = document.createElement('script');
+      el.src = './vendor/katex/mhchem.min.js';
+      el.onload = () => { preambleRev++; requestRender(); resolve(true); };
+      el.onerror = () => resolve(false);
+      document.head.appendChild(el);
+    });
+  }
+  return mhchemLoading;
+}
+
+// Applique un préambule : renvoie { error, unsupported }.
+function applyPreamble(text, { broadcast = true, save = true } = {}) {
+  state.preamble = text;
+  const { body, packages } = normalizePreamble(text);
+  const unsupported = [];
+  for (const p of packages) {
+    if (p === 'mhchem') loadMhchem();
+    else if (!BUILTIN_PACKAGES.has(p) && !EMULATED_PACKAGES.has(p)) unsupported.push(p);
+  }
+  const macros = {};
+  let error = null;
+  if (body) {
+    try {
+      katex.renderToString(body, { macros, globalGroup: true, throwOnError: true });
+    } catch (err) {
+      error = err.message.replace(/^KaTeX parse error: /, '');
+    }
+  }
+  katexMacros = macros;
+  preambleRev++;
+  if (save) scheduleSave();
+  if (broadcast && preambleState) preambleState.set(text).catch(() => {});
+  requestRender();
+  return { error, unsupported };
+}
+
+function setPreambleStatus(text, isError = false) {
+  const el = $('#preamble-status');
+  el.textContent = text;
+  el.classList.toggle('error', isError);
+}
+
+function openPreamble() {
+  $('#preamble-text').value = state.preamble;
+  setPreambleStatus('');
+  preambleDialog.showModal();
+  $('#preamble-text').focus();
+}
+
+$('#btn-preamble').addEventListener('click', openPreamble);
+$('#preamble-cancel').addEventListener('click', () => preambleDialog.close());
+$('#preamble-apply').addEventListener('click', () => {
+  const { error, unsupported } = applyPreamble($('#preamble-text').value);
+  const notes = [];
+  if (error) notes.push('Erreur : ' + error);
+  if (unsupported.length) notes.push('Non pris en charge par KaTeX (ignoré) : ' + unsupported.join(', '));
+  if (error) { setPreambleStatus(notes.join('\n'), true); return; }
+  preambleDialog.close();
+  flash(notes.length ? notes.join(' · ') : 'Préambule appliqué', notes.length ? 6000 : 2500);
+});
+preambleDialog.addEventListener('keydown', (ev) => {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') $('#preamble-apply').click();
+  ev.stopPropagation();
+});
+
+// ---------------------------------------------------------------------------
 // Enregistrer / ouvrir une session, exporter en PDF
 // ---------------------------------------------------------------------------
 function flash(text, ms = 3500) {
@@ -1571,7 +1661,7 @@ function base64ToBuf(b64) {
 
 async function saveSession() {
   const objects = sortedObjects();
-  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), objects, files: {} };
+  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), preamble: state.preamble, objects, files: {} };
   for (const o of objects) {
     if (isRect(o) && files.has(o.fileId) && !data.files[o.fileId]) data.files[o.fileId] = bufToBase64(files.get(o.fileId));
   }
@@ -1587,8 +1677,13 @@ async function openSession(file) {
   }
   const objs = data.objects.filter((o) => o && typeof o.id === 'string' && !state.objects.has(o.id));
   if (objs.length) applyOp({ t: 'add', objs });
+  let note = '';
+  if (typeof data.preamble === 'string' && data.preamble.trim()) {
+    if (!state.preamble.trim()) applyPreamble(data.preamble);
+    else if (data.preamble.trim() !== state.preamble.trim()) note = ' · préambule de la session ignoré (la salle en a déjà un)';
+  }
   fitView();
-  flash(`Session ouverte : ${objs.length} éléments ajoutés`);
+  flash(`Session ouverte : ${objs.length} éléments ajoutés${note}`, note ? 6000 : 3500);
 }
 
 // --- Rastérisation d'un texte (KaTeX) en PNG via SVG <foreignObject>, polices incluses.
@@ -1939,7 +2034,7 @@ window.addEventListener('resize', () => updateSelectionBox());
 new ResizeObserver(() => document.documentElement.style.setProperty('--toolbar-h', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar'));
 
 window.addEventListener('keydown', (ev) => {
-  if (editing || /^(INPUT|TEXTAREA)$/.test(ev.target.tagName)) return;
+  if (editing || /^(INPUT|TEXTAREA)$/.test(ev.target.tagName) || ev.target.closest('dialog')) return;
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); return; }
   if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); redo(); return; }
