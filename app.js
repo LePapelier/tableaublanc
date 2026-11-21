@@ -2431,20 +2431,6 @@ function setTool(tool) {
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
   if (!isSelectTool) setSelection([]);
   setHint('');
-  const unusedHints = (false ? {
-    eraser: 'Glisser sur un trait pour l’effacer',
-    text: 'Toucher pour écrire · $…$ = LaTeX',
-    select: 'Toucher un trait ou encadrer une zone · glisser pour déplacer · coins : taille · poignée du haut : rotation',
-    lasso: 'Entourer à main levée les traits à sélectionner · glisser pour déplacer · coins : taille',
-    hand: 'Glisser pour déplacer la vue · deux doigts : zoom',
-  } : {
-    eraser: 'Glisser sur un trait pour l’effacer',
-    text: 'Cliquer pour écrire · $…$ = LaTeX en ligne · $…$ = bloc',
-    select: 'Cliquer ou encadrer pour sélectionner · glisser pour déplacer · coins : taille · poignée du haut : rotation (Maj : pas de 15°) · double-clic : texte',
-    lasso: 'Entourer à main levée les traits à sélectionner · Maj : ajouter à la sélection',
-    hand: 'Glisser pour déplacer la vue · Ctrl + molette : zoom',
-  })[tool] || '');
-  void unusedHints;
 }
 
 function setHint(text) { hint.textContent = text; }
