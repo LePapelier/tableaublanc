@@ -27,6 +27,11 @@ jobs:
         run: |
           mkdir -p _site
           cp -r index.html 404.html robots.txt app.js latex-extras.mjs mqtt-lite.mjs style.css icon.svg icon-192.png icon-512.png apple-touch-icon.png og.png manifest.webmanifest vendor _site/
+          # Versionnage des ressources : les navigateurs rechargent script et styles à chaque déploiement.
+          V=${GITHUB_SHA::8}
+          sed -i "s|\./app.js\"|./app.js?v=$V\"|; s|\./style.css\"|./style.css?v=$V\"|; s|\./vendor/katex/katex.min.css\"|./vendor/katex/katex.min.css?v=$V\"|; s|\./vendor/katex/katex.min.js\"|./vendor/katex/katex.min.js?v=$V\"|" _site/index.html
+          sed -i "s|'\./latex-extras.mjs'|'./latex-extras.mjs?v=$V'|; s|'\./mqtt-lite.mjs'|'./mqtt-lite.mjs?v=$V'|; s|'\./vendor/trystero.js'|'./vendor/trystero.js?v=$V'|; s|'\./vendor/pdfjs/pdf.min.mjs'|'./vendor/pdfjs/pdf.min.mjs?v=$V'|; s|'\./vendor/pdf-lib.esm.min.js'|'./vendor/pdf-lib.esm.min.js?v=$V'|" _site/app.js
+          grep -c "v=$V" _site/index.html _site/app.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
