@@ -85,13 +85,17 @@ let dpr = window.devicePixelRatio || 1;
 // Sauvegarde locale (IndexedDB)
 // ---------------------------------------------------------------------------
 const db = new Promise((resolve) => {
-  const req = indexedDB.open('tableaublanc', 1);
+  // Safari laisse parfois une ouverture IndexedDB en suspens : on n'attend pas plus de 3 s.
+  const timer = setTimeout(() => resolve(null), 3000);
+  let req;
+  try { req = indexedDB.open('tableaublanc', 1); } catch (_) { clearTimeout(timer); return resolve(null); }
   req.onupgradeneeded = () => {
     req.result.createObjectStore('rooms');
     req.result.createObjectStore('files');
   };
-  req.onsuccess = () => resolve(req.result);
-  req.onerror = () => resolve(null);
+  req.onsuccess = () => { clearTimeout(timer); resolve(req.result); };
+  req.onerror = () => { clearTimeout(timer); resolve(null); };
+  req.onblocked = () => { clearTimeout(timer); resolve(null); };
 });
 
 async function idbGet(store, key) {
@@ -106,7 +110,7 @@ async function idbGet(store, key) {
 async function idbPut(store, key, value) {
   const d = await db;
   if (!d) return;
-  d.transaction(store, 'readwrite').objectStore(store).put(value, key);
+  try { d.transaction(store, 'readwrite').objectStore(store).put(value, key); } catch (_) { /* quota ou base fermée */ }
 }
 
 let saveTimer = null;
@@ -179,6 +183,8 @@ function connect() {
     cursor: room.makeAction('cursor'),
     sync: room.makeAction('sync', { kind: 'request' }),
     file: room.makeAction('file', { kind: 'request' }),
+    digest: room.makeAction('digest', { kind: 'request' }),
+    fetch: room.makeAction('fetch', { kind: 'request' }),
   };
   profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af' });
   profile.set({ name: me.name, color: me.color }).catch(() => {});
@@ -219,6 +225,11 @@ function connect() {
   });
   actions.cursor.onMessage((msg, { peerId }) => updateRemoteCursor(peerId, msg));
   actions.sync.onRequest(() => ({ objects: [...state.objects.values()], tombstones: [...state.tombstones] }));
+  actions.digest.onRequest(() => ({
+    revs: Object.fromEntries([...state.objects.values()].map((o) => [o.id, o.rev || 0])),
+    tombstones: [...state.tombstones],
+  }));
+  actions.fetch.onRequest((ids) => (Array.isArray(ids) ? ids.map((id) => state.objects.get(id)).filter(Boolean) : []));
   actions.file.onRequest((fileId) => {
     const buf = files.get(fileId);
     return buf ? new Uint8Array(buf) : null;
@@ -243,6 +254,52 @@ function connect() {
     requestRender();
   });
 }
+
+// Réconciliation avec un pair : on compare les empreintes (id → révision) et on échange ce qui manque,
+// dans les deux sens. Utile après un gel de l'onglet (Safari en arrière-plan), une coupure réseau, etc.
+async function reconcileWith(peerId) {
+  if (!actions) return;
+  try {
+    const d = await actions.digest.request(null, { target: peerId, timeoutMs: 20000 });
+    if (!d || typeof d !== 'object') return;
+    const theirs = d.revs || {};
+    for (const [id, t] of d.tombstones || []) {
+      if (!state.tombstones.has(id)) {
+        state.tombstones.set(id, t);
+        if (state.objects.has(id)) removeObjectLocal(id);
+      }
+    }
+    const missing = Object.entries(theirs)
+      .filter(([id, rev]) => !state.tombstones.has(id) && (!state.objects.has(id) || (state.objects.get(id).rev || 0) < rev))
+      .map(([id]) => id);
+    if (missing.length) {
+      const objs = await actions.fetch.request(missing, { target: peerId, timeoutMs: 60000 });
+      mergeObjects(Array.isArray(objs) ? objs : [], peerId);
+    }
+    const toPush = [...state.objects.values()].filter((o) => !(o.id in theirs) || theirs[o.id] < (o.rev || 0));
+    for (const obj of toPush) actions.op.send({ t: 'add', obj }, { target: peerId }).catch(() => {});
+    const deadIds = [...state.tombstones.keys()].filter((id) => id in theirs);
+    if (deadIds.length) actions.op.send({ t: 'remove', ids: deadIds }, { target: peerId }).catch(() => {});
+    scheduleSave();
+    requestRender();
+  } catch (_) {
+    /* pair parti ou injoignable */
+  }
+}
+
+let reconcileIndex = 0;
+function reconcileAll() {
+  for (const id of peerIds()) reconcileWith(id);
+}
+setInterval(() => {
+  const ids = peerIds();
+  if (!ids.length || document.hidden) return;
+  reconcileWith(ids[reconcileIndex++ % ids.length]);
+}, 45000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(reconcileAll, 1500); });
+window.addEventListener('online', () => setTimeout(reconcileAll, 3000));
+// Safari restaure les pages depuis son cache avec des connexions mortes : on repart proprement.
+window.addEventListener('pageshow', (ev) => { if (ev.persisted) location.reload(); });
 
 function broadcast(kind, payload) {
   if (!actions || !peerIds().length) return;
@@ -942,7 +999,7 @@ function openEditor(wx, wy, obj) {
   const [sx, sy] = toScreen(editing.x, editing.y);
   editor.style.left = sx + 'px';
   editor.style.top = sy + 'px';
-  editor.style.fontSize = Math.max(13, Math.min(28, (obj ? obj.size : state.fontSize) * state.view.scale * 0.8)) + 'px';
+  editor.style.fontSize = Math.max(16, Math.min(28, (obj ? obj.size : state.fontSize) * state.view.scale * 0.8)) + 'px';
   editor.value = obj ? obj.text : '';
   editor.hidden = false;
   editor.focus();
@@ -1570,6 +1627,10 @@ function renderUsers() {
   $('#btn-name').textContent = me.name;
   const ul = $('#users-list');
   ul.replaceChildren();
+  const head = document.createElement('li');
+  head.className = 'room';
+  head.append('Salle ', Object.assign(document.createElement('code'), { textContent: ROOM }));
+  ul.appendChild(head);
   for (const u of list) {
     const li = document.createElement('li');
     const dot = document.createElement('span');
@@ -1813,8 +1874,22 @@ async function rasterizeText(obj, scale = 3) {
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(pxW * k * scale));
   c.height = Math.max(1, Math.round(pxH * k * scale));
-  c.getContext('2d').drawImage(img, 0, 0);
-  const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0);
+  let blob = null;
+  try {
+    blob = await new Promise((resolve, reject) => { try { c.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob'))), 'image/png'); } catch (e) { reject(e); } });
+  } catch (_) {
+    // Safari : le canvas est marqué « contaminé » par le SVG ; on retombe sur un rendu texte brut.
+    g.clearRect(0, 0, c.width, c.height);
+    g.scale(k * scale, k * scale);
+    g.fillStyle = obj.color;
+    g.font = '16px system-ui, -apple-system, sans-serif';
+    g.textBaseline = 'top';
+    const lines = String(obj.text || '').replace(/\$+/g, '').split('\n');
+    lines.forEach((line, i) => g.fillText(line, 6, 4 + i * 20.8));
+    blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+  }
   return { png: await blob.arrayBuffer(), w: pxW * k, h: pxH * k };
 }
 
@@ -2100,6 +2175,23 @@ menu.addEventListener('click', (ev) => {
   const el = $(target.dataset.action);
   if (el.tagName === 'LABEL') el.querySelector('input').click(); else el.click();
 });
+// Salles : nouvelle salle ou salle existante (code ou lien)
+function goToRoom(id) {
+  const url = new URL(location.href);
+  url.searchParams.set('room', id);
+  location.href = url.href;
+}
+$('#btn-new-room').addEventListener('click', () => goToRoom(Math.random().toString(36).slice(2, 8)));
+$('#btn-join-room').addEventListener('click', () => {
+  const answer = prompt('Code de la salle ou lien à rejoindre :', '');
+  if (!answer) return;
+  let id = answer.trim();
+  try { const u = new URL(id); id = u.searchParams.get('room') || ''; } catch (_) { /* pas un lien */ }
+  id = id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  if (!id) { flash('Code de salle invalide'); return; }
+  if (id === ROOM) { flash('Vous êtes déjà dans cette salle'); return; }
+  goToRoom(id);
+});
 $('#btn-save').addEventListener('click', () => saveSession().catch((err) => flash('Échec : ' + err.message)));
 $('#btn-export-pdf').addEventListener('click', () => exportPdf().catch((err) => { console.error(err); flash('Échec de l’export : ' + err.message); }));
 $('#session-input').addEventListener('change', (ev) => {
@@ -2142,9 +2234,18 @@ window.addEventListener('keyup', (ev) => {
 });
 
 // Zoom du navigateur désactivé : le pincement ne doit zoomer que le tableau.
-for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
-  document.addEventListener(type, (ev) => ev.preventDefault(), { passive: false });
-}
+// Safari (macOS trackpad) signale le pincement par gesture* ; sur iOS les doigts passent déjà par les
+// événements pointer, on n'utilise donc gesture* que si aucun doigt n'est suivi.
+let gestureScale = 1;
+document.addEventListener('gesturestart', (ev) => { ev.preventDefault(); gestureScale = 1; }, { passive: false });
+document.addEventListener('gesturechange', (ev) => {
+  ev.preventDefault();
+  if (pointers.size === 0 && ev.scale > 0) {
+    zoomAt(ev.clientX, ev.clientY, ev.scale / gestureScale);
+    gestureScale = ev.scale;
+  }
+}, { passive: false });
+document.addEventListener('gestureend', (ev) => ev.preventDefault(), { passive: false });
 document.addEventListener('touchmove', (ev) => {
   if (ev.touches.length > 1 || (ev.scale !== undefined && ev.scale !== 1)) ev.preventDefault();
 }, { passive: false });
@@ -2157,7 +2258,8 @@ resize();
 setTool('pen');
 updateUndoButtons();
 renderUsers();
-loadLocal().then(() => { fitView(); connect(); });
+connect();
+loadLocal().then(() => fitView());
 
 // Accès à l'état pour le débogage et les tests.
-window.tableaublanc = { state, files, get room() { return room; } };
+window.tableaublanc = { state, files, get room() { return room; }, reconcileAll };
