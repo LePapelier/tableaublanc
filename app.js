@@ -53,7 +53,8 @@ const state = {
   undo: [],
   redo: [],
 };
-const files = new Map(); // fileId -> ArrayBuffer (PDF)
+const files = new Map(); // fileId -> ArrayBuffer (PDF, images)
+const isRect = (obj) => obj.type === 'pdf' || obj.type === 'image';
 
 const canvas = $('#board');
 const ctx = canvas.getContext('2d');
@@ -151,7 +152,8 @@ function connect() {
     sync: room.makeAction('sync', { kind: 'request' }),
     file: room.makeAction('file', { kind: 'request' }),
   };
-  profile = room.makeUserState('profile', { name: me.name, color: me.color });
+  profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af' });
+  profile.set({ name: me.name, color: me.color }).catch(() => {});
 
   room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); });
   room.ready.then(() => { if (!peerIds().length) setStatus('Personne d’autre pour l’instant : partagez le lien de la salle'); })
@@ -216,7 +218,7 @@ function mergeObjects(objs, fromPeer) {
     const cur = state.objects.get(obj.id);
     if (!cur || (obj.rev || 0) > (cur.rev || 0)) {
       state.objects.set(obj.id, obj);
-      if (obj.type === 'pdf') fileHints.set(obj.fileId, fromPeer);
+      if (isRect(obj)) fileHints.set(obj.fileId, fromPeer);
       changed = true;
     }
   }
@@ -435,6 +437,7 @@ function bbox(obj) {
       return { x: minX - r, y: minY - r, w: maxX - minX + 2 * r, h: maxY - minY + 2 * r };
     }
     case 'pdf':
+    case 'image':
       return rotatedBounds(obj.x, obj.y, obj.w, obj.h, obj.rot || 0);
     case 'text': {
       const [w, h] = textSize(obj);
@@ -466,7 +469,7 @@ function rotatedBounds(x, y, w, h, rot) {
 
 // Taille (w, h) et coins d'un objet rectangulaire (texte ou PDF).
 function objectRect(obj) {
-  const [w, h] = obj.type === 'pdf' ? [obj.w, obj.h] : textSize(obj);
+  const [w, h] = isRect(obj) ? [obj.w, obj.h] : textSize(obj);
   return { w, h, corners: rectCorners(obj.x, obj.y, w, h, obj.rot || 0) };
 }
 
@@ -499,7 +502,7 @@ function segDist(px, py, ax, ay, bx, by) {
 }
 
 // Ordre de rendu : PDF en dessous, puis traits, puis textes.
-const Z = { pdf: 0, stroke: 1, text: 2 };
+const Z = { pdf: 0, image: 0.5, stroke: 1, text: 2 };
 function sortedObjects() {
   return [...state.objects.values()].sort((a, b) => (Z[a.type] - Z[b.type]) || ((a.ts || 0) - (b.ts || 0)));
 }
@@ -559,6 +562,7 @@ function render() {
     if (b && (b.x > vx1 || b.x + b.w < vx0 || b.y > vy1 || b.y + b.h < vy0)) continue;
     if (obj.type === 'stroke') drawStroke(obj);
     else if (obj.type === 'pdf') drawPdf(obj);
+    else if (obj.type === 'image') drawImageObj(obj);
   }
   for (const draft of state.drafts.values()) drawStroke(draft);
   if (currentStroke) drawStroke(currentStroke);
@@ -650,6 +654,7 @@ function storeFile(fileId, buf) {
   files.set(fileId, buf);
   idbPut('files', fileId, buf);
   pdfDocs.delete(fileId);
+  imageCache.delete(fileId);
   for (const key of [...pageCache.keys()]) {
     const obj = state.objects.get(key.split('@')[0]);
     if (!obj || obj.fileId === fileId) pageCache.delete(key);
@@ -745,6 +750,65 @@ async function renderPdfPage(obj, bucket) {
   c.height = Math.ceil(vp.height);
   await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
   return c;
+}
+
+const imageCache = new Map(); // fileId -> ImageBitmap | 'pending' | 'error'
+
+function drawImageObj(obj) {
+  let img = imageCache.get(obj.fileId);
+  if (!img) {
+    if (files.has(obj.fileId)) {
+      imageCache.set(obj.fileId, 'pending');
+      createImageBitmap(new Blob([files.get(obj.fileId)], { type: obj.mime || 'image/png' }))
+        .then((bmp) => { imageCache.set(obj.fileId, bmp); requestRender(); })
+        .catch(() => imageCache.set(obj.fileId, 'error'));
+    } else {
+      ensureFile(obj.fileId).then((ok) => { if (!ok) imageCache.set(obj.fileId, 'missing'); });
+    }
+  }
+  ctx.save();
+  ctx.translate(obj.x, obj.y);
+  if (obj.rot) ctx.rotate(obj.rot);
+  if (img && typeof img !== 'string') {
+    ctx.drawImage(img, 0, 0, obj.w, obj.h);
+  } else {
+    ctx.fillStyle = '#eef1f5';
+    ctx.fillRect(0, 0, obj.w, obj.h);
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = `${Math.max(12, obj.w / 30)}px system-ui`;
+    ctx.textAlign = 'center';
+    ctx.fillText(img === 'missing' ? 'Image indisponible' : img === 'error' ? 'Image illisible' : 'Réception de l’image…', obj.w / 2, obj.h / 2);
+    ctx.textAlign = 'start';
+  }
+  ctx.restore();
+}
+
+async function insertImageFile(file, wx, wy) {
+  setHint('Lecture de l’image…');
+  try {
+    const buf = await file.arrayBuffer();
+    const fileId = await sha256(buf);
+    const bmp = await createImageBitmap(new Blob([buf], { type: file.type }));
+    if (!files.has(fileId)) storeFile(fileId, buf);
+    const w = Math.min(800, bmp.width);
+    const h = (w * bmp.height) / bmp.width;
+    applyOp({ t: 'add', objs: [{ id: uid(), type: 'image', fileId, mime: file.type || 'image/png', x: wx, y: wy, w, h, ts: Date.now() }] });
+    bmp.close?.();
+    flash('Image insérée');
+  } catch (err) {
+    flash('Échec : ' + err.message);
+  }
+}
+
+// Aiguillage PDF / image pour les fichiers déposés, choisis ou collés.
+function insertFiles(fileList, wx, wy) {
+  let offset = 0;
+  for (const file of fileList) {
+    if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) insertPdfFile(file, wx + offset, wy);
+    else if (file.type.startsWith('image/')) insertImageFile(file, wx + offset, wy);
+    else continue;
+    offset += 860;
+  }
 }
 
 async function insertPdfFile(file, wx, wy) {
@@ -862,7 +926,12 @@ editor.addEventListener('keydown', (ev) => {
   else if (ev.key === 'Escape') { ev.preventDefault(); closeEditor(false); }
   ev.stopPropagation();
 });
-editor.addEventListener('blur', () => setTimeout(() => { if (editing && !editor.hidden) closeEditor(true); }, 0));
+editor.addEventListener('blur', () => {
+  // Fermeture différée liée à la session d'édition courante : un minuteur en retard ne doit pas fermer un éditeur
+  // rouvert entre-temps (Chrome peut traiter les événements de souris avant les minuteurs quand la page est occupée).
+  const session = editing;
+  setTimeout(() => { if (session && editing === session && !editor.hidden) closeEditor(true); }, 0);
+});
 
 // ---------------------------------------------------------------------------
 // Sélection (plusieurs objets, déplacement, redimensionnement)
@@ -945,7 +1014,7 @@ function insideBounds(b, wx, wy, margin = 0) {
 function snapshot(obj) {
   switch (obj.type) {
     case 'stroke': return { points: obj.points.slice(), width: obj.width };
-    case 'pdf': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h, rot: obj.rot || 0 };
+    case 'pdf': case 'image': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h, rot: obj.rot || 0 };
     default: return { x: obj.x, y: obj.y, size: obj.size, rot: obj.rot || 0 };
   }
 }
@@ -975,7 +1044,7 @@ function scaleObject(obj, ax, ay, f) {
   } else {
     obj.x = ax + (obj.x - ax) * f;
     obj.y = ay + (obj.y - ay) * f;
-    if (obj.type === 'pdf') { obj.w *= f; obj.h *= f; }
+    if (isRect(obj)) { obj.w *= f; obj.h *= f; }
     else obj.size = clamp(obj.size * f, 6, 400);
   }
 }
@@ -1387,31 +1456,30 @@ stage.addEventListener('drop', (ev) => {
   ev.preventDefault();
   stage.classList.remove('dragover');
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
-  let offset = 0;
-  for (const file of ev.dataTransfer.files) {
-    if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
-      insertPdfFile(file, wx + offset, wy);
-      offset += 860;
-    }
-  }
+  insertFiles(ev.dataTransfer.files, wx, wy);
 });
 $('#pdf-input').addEventListener('change', (ev) => {
   const [wx, wy] = toWorld(canvas.clientWidth / 2 - 400 * state.view.scale, 80);
-  let offset = 0;
-  for (const file of ev.target.files) {
-    insertPdfFile(file, wx + offset, wy);
-    offset += 860;
-  }
+  insertFiles(ev.target.files, wx, wy);
   ev.target.value = '';
+});
+// Collage d'une image (Ctrl+V) depuis le presse-papiers
+window.addEventListener('paste', (ev) => {
+  if (editing || /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+  const imgs = [...(ev.clipboardData?.items || [])].filter((it) => it.type.startsWith('image/')).map((it) => it.getAsFile()).filter(Boolean);
+  if (!imgs.length) return;
+  ev.preventDefault();
+  const [wx, wy] = toWorld(canvas.clientWidth / 2 - 200 * state.view.scale, canvas.clientHeight / 2 - 150 * state.view.scale);
+  insertFiles(imgs, wx, wy);
 });
 
 // ---------------------------------------------------------------------------
 // Curseurs et participants
 // ---------------------------------------------------------------------------
 function userOf(peerId) {
-  const userId = peerUsers.get(peerId);
-  const p = (profile && userId && profile.get(userId)) || {};
-  return { name: p.name || 'Anonyme', color: p.color || '#888' };
+  const userId = peerUsers.get(peerId) || room?.getPeers()[peerId]?.userId;
+  const p = (profile && userId && profile.has(userId) && profile.get(userId)) || {};
+  return { name: p.name || 'Anonyme', color: p.color || '#9ca3af' };
 }
 
 function updateRemoteCursor(peerId, msg) {
@@ -1447,6 +1515,272 @@ function renderUsers() {
   }
   box.title = list.length > 1 ? `${list.length} participants` : 'Participants';
   $('#btn-name').textContent = me.name;
+  const ul = $('#users-list');
+  ul.replaceChildren();
+  for (const u of list) {
+    const li = document.createElement('li');
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = u.color;
+    li.append(dot, document.createTextNode(u.name + (u.self ? ' (moi)' : '')));
+    ul.appendChild(li);
+  }
+}
+$('#users').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  const ul = $('#users-list');
+  ul.hidden = !ul.hidden;
+  if (!ul.hidden) $('#menu').hidden = true;
+});
+window.addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#users, #users-list')) $('#users-list').hidden = true; });
+
+// ---------------------------------------------------------------------------
+// Enregistrer / ouvrir une session, exporter en PDF
+// ---------------------------------------------------------------------------
+function flash(text, ms = 3500) {
+  setHint(text);
+  clearTimeout(flash.timer);
+  flash.timer = setTimeout(() => setHint(''), ms);
+}
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+}
+
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}h${p(d.getMinutes())}`;
+}
+
+function bufToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function base64ToBuf(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function saveSession() {
+  const objects = sortedObjects();
+  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), objects, files: {} };
+  for (const o of objects) {
+    if (isRect(o) && files.has(o.fileId) && !data.files[o.fileId]) data.files[o.fileId] = bufToBase64(files.get(o.fileId));
+  }
+  download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `tableau-${ROOM}-${stamp()}.json`);
+  flash(`Session enregistrée (${objects.length} éléments)`);
+}
+
+async function openSession(file) {
+  const data = JSON.parse(await file.text());
+  if (data.app !== 'tableaublanc' || !Array.isArray(data.objects)) throw new Error('ce n’est pas une session de tableau blanc');
+  for (const [id, b64] of Object.entries(data.files || {})) {
+    if (!files.has(id)) storeFile(id, base64ToBuf(b64));
+  }
+  const objs = data.objects.filter((o) => o && typeof o.id === 'string' && !state.objects.has(o.id));
+  if (objs.length) applyOp({ t: 'add', objs });
+  fitView();
+  flash(`Session ouverte : ${objs.length} éléments ajoutés`);
+}
+
+// --- Rastérisation d'un texte (KaTeX) en PNG via SVG <foreignObject>, polices incluses.
+let katexCssPromise = null;
+function katexCssInline() {
+  if (!katexCssPromise) {
+    katexCssPromise = (async () => {
+      const base = new URL('./vendor/katex/', import.meta.url);
+      let css = await (await fetch(new URL('katex.min.css', base))).text();
+      const names = [...new Set([...css.matchAll(/url\(fonts\/([^)]+)\.woff2\)/g)].map((m) => m[1]))];
+      const data = new Map();
+      await Promise.all(names.map(async (n) => {
+        const buf = await (await fetch(new URL(`fonts/${n}.woff2`, base))).arrayBuffer();
+        data.set(n, bufToBase64(buf));
+      }));
+      css = css.replace(/url\(fonts\/([^)]+)\.woff2\) format\("woff2"\)(,url\(fonts\/[^)]+\) format\("[^"]+"\))*/g,
+        (_, n) => `url(data:font/woff2;base64,${data.get(n)}) format("woff2")`);
+      return css;
+    })();
+  }
+  return katexCssPromise;
+}
+
+async function rasterizeText(obj, scale = 3) {
+  const el = overlay.querySelector(`[data-id="${obj.id}"]`);
+  if (!el) return null;
+  const css = await katexCssInline();
+  const k = obj.size / 16;
+  // Marge : offsetWidth est arrondi et les polices peuvent différer d'un demi-pixel ; le texte étant aligné à
+  // gauche et en haut, un surplus transparent à droite et en bas est sans effet sur le placement.
+  const pxW = el.offsetWidth + 16, pxH = el.offsetHeight + 8;
+  const holder = document.createElement('div');
+  holder.innerHTML = el.innerHTML;
+  const xhtml = new XMLSerializer().serializeToString(holder).replace(/^<div[^>]*>|<\/div>$/g, '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pxW * k * scale}" height="${pxH * k * scale}">
+    <foreignObject width="100%" height="100%">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="transform-origin:0 0;transform:scale(${k * scale});width:${pxW}px;height:${pxH}px">
+        <style>${css}</style>
+        <div style="box-sizing:border-box;width:max-content;max-width:${pxW}px;white-space:pre-wrap;line-height:1.3;padding:4px 6px;font-size:16px;color:${obj.color};font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">${xhtml}</div>
+      </div>
+    </foreignObject></svg>`;
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('rendu du texte impossible'));
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  });
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(pxW * k * scale));
+  c.height = Math.max(1, Math.round(pxH * k * scale));
+  c.getContext('2d').drawImage(img, 0, 0);
+  const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+  return { png: await blob.arrayBuffer(), w: pxW * k, h: pxH * k };
+}
+
+function hexToRgb01(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  return m ? [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255] : [0, 0, 0];
+}
+
+// Repère d'un objet rectangulaire : monde -> coordonnées locales (origine en haut à gauche, rotation annulée).
+function localMapper(obj) {
+  const rot = obj.rot || 0;
+  const c = Math.cos(-rot), s = Math.sin(-rot);
+  return (wx, wy) => {
+    const dx = wx - obj.x, dy = wy - obj.y;
+    return [dx * c - dy * s, dx * s + dy * c];
+  };
+}
+
+async function exportPdf() {
+  flash('Préparation du PDF…', 60000);
+  const { PDFDocument, rgb, LineCapStyle, degrees } = await import('./vendor/pdf-lib.esm.min.js');
+  const out = await PDFDocument.create();
+  const all = sortedObjects();
+  const pages = all.filter((o) => o.type === 'pdf').sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const strokes = all.filter((o) => o.type === 'stroke');
+  const texts = all.filter((o) => o.type === 'text');
+  const images = all.filter((o) => o.type === 'image');
+  const placed = new Set();
+  const imageEmbeds = new Map();
+  const imageEmbed = async (o) => {
+    if (!imageEmbeds.has(o.fileId)) {
+      imageEmbeds.set(o.fileId, (async () => {
+        const buf = files.get(o.fileId);
+        if (!buf) return null;
+        if (o.mime === 'image/png') return out.embedPng(buf);
+        if (o.mime === 'image/jpeg') return out.embedJpg(buf);
+        const bmp = await createImageBitmap(new Blob([buf], { type: o.mime }));
+        const c = document.createElement('canvas');
+        c.width = bmp.width; c.height = bmp.height;
+        c.getContext('2d').drawImage(bmp, 0, 0);
+        const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+        return out.embedPng(await blob.arrayBuffer());
+      })());
+    }
+    return imageEmbeds.get(o.fileId);
+  };
+  const srcDocs = new Map();
+  const textImages = new Map();
+  const textImage = async (t) => {
+    if (!textImages.has(t.id)) {
+      const r = await rasterizeText(t);
+      textImages.set(t.id, r ? { ...r, img: await out.embedPng(r.png) } : null);
+    }
+    return textImages.get(t.id);
+  };
+
+  // Dessine traits et textes sur une page ; toPt : monde -> espace utilisateur PDF ; k : points par unité monde ;
+  // extraRot : rotation (degrés) à ajouter aux images (rotation propre de la page PDF).
+  const drawOn = async (page, items, toPt, k, extraRot) => {
+    for (const o of items) {
+      if (o.type === 'stroke') {
+        const [r, g, b] = hexToRgb01(o.color);
+        const p = o.points;
+        if (p.length === 2) {
+          const [x, y] = toPt(p[0], p[1]);
+          page.drawCircle({ x, y, size: (o.width * k) / 2, color: rgb(r, g, b), opacity: o.opacity ?? 1 });
+          continue;
+        }
+        let d = '';
+        for (let i = 0; i < p.length; i += 2) {
+          const [x, y] = toPt(p[i], p[i + 1]);
+          d += (i ? ' L ' : 'M ') + x.toFixed(2) + ' ' + (-y).toFixed(2);
+        }
+        page.drawSvgPath(d, { x: 0, y: 0, borderColor: rgb(r, g, b), borderWidth: o.width * k, borderOpacity: o.opacity ?? 1, borderLineCap: LineCapStyle.Round });
+      } else if (o.type === 'text' || o.type === 'image') {
+        const t = o.type === 'text' ? await textImage(o) : { img: await imageEmbed(o), w: o.w, h: o.h };
+        if (!t || !t.img) continue;
+        const rot = o.rot || 0;
+        // Coin bas-gauche de l'image dans le monde (ancre de pdf-lib), puis rotation
+        const bx = o.x - t.h * Math.sin(rot), by = o.y + t.h * Math.cos(rot);
+        const [x, y] = toPt(bx, by);
+        page.drawImage(t.img, { x, y, width: t.w * k, height: t.h * k, rotate: degrees(-(rot * 180) / Math.PI + extraRot) });
+      }
+    }
+  };
+
+  for (const pg of pages) {
+    if (!files.has(pg.fileId)) continue;
+    let src = srcDocs.get(pg.fileId);
+    if (!src) {
+      src = await PDFDocument.load(files.get(pg.fileId), { ignoreEncryption: true });
+      srcDocs.set(pg.fileId, src);
+    }
+    const [page] = await out.copyPages(src, [pg.page - 1]);
+    out.addPage(page);
+    const { width: W, height: H } = page.getSize();
+    const r = ((page.getRotation().angle % 360) + 360) % 360;
+    const DW = r === 90 || r === 270 ? H : W; // largeur affichée
+    const k = DW / pg.w;
+    const local = localMapper(pg);
+    const toPt = (wx, wy) => {
+      const [lx, ly] = local(wx, wy);
+      const dx = lx * k, dy = ly * k; // repère affiché, y vers le bas
+      if (r === 90) return [dy, dx];
+      if (r === 180) return [W - dx, dy];
+      if (r === 270) return [W - dy, H - dx];
+      return [dx, H - dy];
+    };
+    const inside = (wx, wy) => { const [lx, ly] = local(wx, wy); return lx >= 0 && lx <= pg.w && ly >= 0 && ly <= pg.h; };
+    const items = [];
+    for (const s of strokes) {
+      if (placed.has(s.id)) continue;
+      const p = s.points;
+      let on = false;
+      for (let i = 0; i < p.length && !on; i += 2) on = inside(p[i], p[i + 1]);
+      if (on) { items.push(s); placed.add(s.id); }
+    }
+    for (const t of [...images, ...texts]) {
+      if (!placed.has(t.id) && inside(t.x, t.y)) { items.push(t); placed.add(t.id); }
+    }
+    items.sort((a, b) => Z[a.type] - Z[b.type]);
+    await drawOn(page, items, toPt, k, r);
+  }
+
+  const rest = [...images, ...strokes, ...texts].filter((o) => !placed.has(o.id));
+  if (rest.length || !out.getPageCount()) {
+    const b = unionBounds(rest) || { x: 0, y: 0, w: 800, h: 600 };
+    const pad = 40;
+    const scale = Math.min(1, 14000 / (b.w + 2 * pad), 14000 / (b.h + 2 * pad));
+    const page = out.addPage([(b.w + 2 * pad) * scale, (b.h + 2 * pad) * scale]);
+    const toPt = (wx, wy) => [(wx - b.x + pad) * scale, page.getHeight() - (wy - b.y + pad) * scale];
+    await drawOn(page, rest, toPt, scale, 0);
+  }
+
+  const bytes = await out.save();
+  download(new Blob([bytes], { type: 'application/pdf' }), `tableau-${ROOM}-${stamp()}.pdf`);
+  flash(`PDF exporté (${out.getPageCount()} page(s))`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,7 +1837,7 @@ for (const c of PALETTE) {
 function setColor(c) {
   state.color = c;
   colorsEl.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s.dataset.color === c));
-  const objs = selectedObjects().filter((o) => o.type !== 'pdf');
+  const objs = selectedObjects().filter((o) => !isRect(o));
   if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { color: o.color }, after: { color: c } })) });
 }
 setColor(state.color);
@@ -1559,7 +1893,15 @@ menu.addEventListener('click', (ev) => {
   const target = ev.target.closest('[data-action]');
   if (!target) return;
   menu.hidden = true;
-  $(target.dataset.action).click();
+  const el = $(target.dataset.action);
+  if (el.tagName === 'LABEL') el.querySelector('input').click(); else el.click();
+});
+$('#btn-save').addEventListener('click', () => saveSession().catch((err) => flash('Échec : ' + err.message)));
+$('#btn-export-pdf').addEventListener('click', () => exportPdf().catch((err) => { console.error(err); flash('Échec de l’export : ' + err.message); }));
+$('#session-input').addEventListener('change', (ev) => {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (file) openSession(file).catch((err) => flash('Fichier illisible : ' + err.message));
 });
 window.addEventListener('pointerdown', (ev) => { if (!menu.hidden && !ev.target.closest('#menu, #btn-menu')) menu.hidden = true; });
 window.addEventListener('resize', () => updateSelectionBox());
@@ -1594,6 +1936,14 @@ window.addEventListener('keydown', (ev) => {
 window.addEventListener('keyup', (ev) => {
   if (ev.key === ' ') { spaceDown = false; if (!drag) setTool(state.tool); }
 });
+
+// Zoom du navigateur désactivé : le pincement ne doit zoomer que le tableau.
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(type, (ev) => ev.preventDefault(), { passive: false });
+}
+document.addEventListener('touchmove', (ev) => {
+  if (ev.touches.length > 1 || (ev.scale !== undefined && ev.scale !== 1)) ev.preventDefault();
+}, { passive: false });
 
 // ---------------------------------------------------------------------------
 // Démarrage

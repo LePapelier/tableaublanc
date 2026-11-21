@@ -24,6 +24,9 @@ copy(path.join(nm, 'katex/dist/fonts'), path.join(out, 'katex/fonts'));
 copy(path.join(nm, 'pdfjs-dist/build/pdf.min.mjs'), path.join(out, 'pdfjs/pdf.min.mjs'));
 copy(path.join(nm, 'pdfjs-dist/build/pdf.worker.min.mjs'), path.join(out, 'pdfjs/pdf.worker.min.mjs'));
 
+// pdf-lib : export du tableau en PDF (chargé à la demande).
+copy(path.join(nm, 'pdf-lib/dist/pdf-lib.esm.min.js'), path.join(out, 'pdf-lib.esm.min.js'));
+
 // Trystero : regroupé en un seul module ESM.
 execFileSync(path.join(nm, '.bin/esbuild'), [
   path.join(nm, 'trystero/dist/index.mjs'),

@@ -19,6 +19,7 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  touch-action: none;
   background: var(--bg);
   color: var(--text);
   overscroll-behavior: none;
@@ -144,6 +145,7 @@ html, body {
 }
 
 #menu {
+  pointer-events: auto;
   position: fixed;
   top: 60px;
   right: 12px;
@@ -159,6 +161,7 @@ html, body {
   z-index: 6;
 }
 #menu button { justify-content: flex-start; height: 40px; padding: 0 12px; font-size: 14px; }
+#menu .sep { width: auto; height: 1px; margin: 4px 8px; }
 .compact-only { display: none !important; }
 
 #editor {
@@ -221,8 +224,20 @@ button, label.file {
   transition: background .12s;
 }
 button:hover, label.file:hover { background: #eef1f5; }
-button.icon { width: 34px; height: 34px; font-size: 18px; }
-button.text { height: 34px; padding: 0 12px; font-size: 13px; font-weight: 500; }
+button svg, label.file svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+button.icon { width: 34px; height: 34px; }
+button.text { height: 34px; padding: 0 12px; font-size: 13px; font-weight: 500; gap: 7px; }
+button.text svg { width: 17px; height: 17px; }
+#menu button svg { width: 18px; height: 18px; margin-right: 10px; opacity: .8; }
 button.primary { background: var(--accent); color: white; }
 button.primary:hover { background: #2563eb; }
 button.danger { color: var(--danger); }
@@ -230,7 +245,27 @@ button.danger:hover { background: #fee2e2; }
 button:disabled { opacity: .4; cursor: default; background: transparent; }
 .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
 
-#users { display: flex; align-items: center; padding: 0 4px; }
+#users { display: flex; align-items: center; padding: 0 4px; cursor: pointer; border-radius: 9px; }
+#users:hover { background: #eef1f5; }
+#users-list {
+  pointer-events: auto;
+  position: fixed;
+  top: 60px;
+  right: 12px;
+  margin: 0;
+  padding: 8px 4px;
+  list-style: none;
+  min-width: 180px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 6;
+  font-size: 14px;
+}
+#users-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+#users-list .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 #users .avatar {
   width: 26px;
   height: 26px;
@@ -271,11 +306,7 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 .tool svg {
   width: 22px;
   height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-width: 1.9;
 }
 .tool.active { background: var(--accent-soft); color: var(--accent); }
 
@@ -330,6 +361,7 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 
 #status.warn { background: #fee2e2; color: #991b1b; }
 #status {
+  pointer-events: none;
   position: fixed;
   top: 64px;
   left: 50%;
@@ -344,7 +376,7 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 }
 
 #stage.dragover::after {
-  content: "Déposer le PDF ici";
+  content: "Déposer le PDF ou l’image ici";
   position: absolute;
   inset: 16px;
   border: 3px dashed var(--accent);
@@ -393,13 +425,14 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
     max-width: 100%;
     overflow-x: auto;
   }
-  #colors { display: flex; gap: 10px; }
-  .swatch { width: 26px; height: 26px; }
+  #colors { display: flex; gap: 7px; }
+  .swatch { width: 24px; height: 24px; }
   #options input[type=range] {
     writing-mode: horizontal-tb;
     direction: ltr;
-    width: 110px;
-    height: 26px;
+    width: 72px;
+    height: 24px;
+    flex: none;
   }
 
   #selection .handle { width: 18px; height: 18px; border-radius: 50%; }
