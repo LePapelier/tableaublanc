@@ -1,6 +1,8 @@
 # Tableau blanc
 
-Petite application web de tableau blanc collaboratif, **sans aucun serveur à héberger** : des fichiers statiques, déployables sur GitHub Pages.
+Un tableau blanc partagé pour dessiner à plusieurs, écrire des formules en LaTeX et annoter des PDF. **Sans aucun serveur à héberger** : des fichiers statiques, déployés sur GitHub Pages, et des navigateurs qui se parlent directement.
+
+Site en ligne : <https://paul-laurent.fr>
 
 - **Dessin à plusieurs en temps réel** (crayon, surligneur, gomme), avec les traits en cours et les curseurs des autres participants.
 - **Texte et LaTeX** : écrivez du texte, entourez les formules de `$…$` (en ligne) ou `$$…$$` (bloc). Rendu avec KaTeX. Quatre tailles de trait et de texte prédéfinies.
@@ -80,4 +82,9 @@ Sur téléphone ou tablette : un doigt dessine (ou sélectionne, avec l'outil fl
 - `vendor/` : KaTeX, pdf.js, pdf-lib et Trystero copiés depuis npm, pour que le site soit autonome. Régénérer avec `npm run vendor` après une mise à jour des dépendances.
 - `mqtt-lite.mjs` : client MQTT minimal (WebSocket) pour le relais de secours.
 - `tools/relay.js` : relais Nostr minimal, optionnel, pour un usage privé ou les tests ; `tools/mqtt-broker.js` : broker MQTT local pour les tests.
+- `icon.svg`, `og.png`, `manifest.webmanifest`, `404.html`, `robots.txt` : icônes, aperçu de lien, manifeste d'installation, page d'erreur et consignes aux robots.
 - `.github/workflows/pages.yml` : déploiement GitHub Pages.
+
+## Licence
+
+MIT, voir `LICENSE`.

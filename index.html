@@ -3,7 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Tableau blanc</title>
+  <title>Tableau blanc — dessin collaboratif, LaTeX et PDF</title>
+  <meta name="description" content="Un tableau blanc partagé pour dessiner à plusieurs, écrire des formules en LaTeX et annoter des PDF. Sans compte ni serveur : les navigateurs se connectent directement entre eux.">
+  <meta name="color-scheme" content="light">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Tableau blanc">
+  <meta property="og:title" content="Tableau blanc — dessin collaboratif, LaTeX et PDF">
+  <meta property="og:description" content="Dessinez à plusieurs, écrivez en LaTeX, annotez vos PDF. Sans compte, sans serveur, directement entre navigateurs.">
+  <meta property="og:image" content="https://paul-laurent.fr/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="fr_FR">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Tableau blanc — dessin collaboratif, LaTeX et PDF">
+  <meta name="twitter:description" content="Dessinez à plusieurs, écrivez en LaTeX, annotez vos PDF. Sans compte, sans serveur.">
+  <meta name="twitter:image" content="https://paul-laurent.fr/og.png">
   <link rel="stylesheet" href="./vendor/katex/katex.min.css">
   <link rel="stylesheet" href="./style.css">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
@@ -15,6 +29,16 @@
   <meta name="apple-mobile-web-app-title" content="Tableau">
 </head>
 <body>
+  <noscript><p style="position:fixed;inset:0;display:grid;place-items:center;margin:0;font-family:system-ui,sans-serif;padding:24px;text-align:center">Ce tableau blanc a besoin de JavaScript pour fonctionner.</p></noscript>
+  <div id="welcome" hidden>
+    <strong>Bienvenue sur votre tableau</strong>
+    <ul>
+      <li>Dessinez avec le crayon, écrivez avec l’outil texte : <code>$x^2$</code> devient une formule.</li>
+      <li>Déposez un PDF ou une image pour écrire par-dessus.</li>
+      <li>Partagez le lien de la salle : les autres vous rejoignent en direct.</li>
+    </ul>
+    <button id="welcome-close" class="text primary">C’est parti</button>
+  </div>
   <div id="stage">
     <canvas id="board"></canvas>
     <div id="overlay"></div>
@@ -33,7 +57,7 @@
     <button id="sel-del" class="text danger" title="Supprimer (Suppr)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg><span>Supprimer</span></button>
   </div>
 
-  <header id="topbar">
+  <header id="topbar" aria-label="Barre principale">
     <div class="group">
       <button id="btn-undo" class="icon" title="Annuler (Ctrl+Z)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /></svg></button>
       <button id="btn-redo" class="icon" title="Rétablir (Ctrl+Y)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" /></svg></button>
@@ -75,7 +99,7 @@
     <label id="btn-open" hidden><input id="session-input" type="file" accept="application/json,.json"></label>
   </header>
 
-  <nav id="toolbar">
+  <nav id="toolbar" aria-label="Outils">
     <button id="toolbar-toggle" title="Replier / déplier la barre d’outils"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg></button>
     <div class="tools">
     <button class="tool" data-tool="select" title="Sélection (V)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" /></svg></button>

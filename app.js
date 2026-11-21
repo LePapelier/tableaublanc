@@ -29,6 +29,7 @@ const ROOM = (() => {
   }
   return room;
 })();
+document.title = `Salle ${ROOM} · Tableau blanc`;
 const RELAYS = PAGE_URL.searchParams.get('relay'); // relais Nostr personnalisés, séparés par des virgules
 // Serveurs TURN : indispensables quand les deux réseaux interdisent la connexion directe (4G, box stricte,
 // réseau d'entreprise). Par défaut : le service public gratuit Open Relay ; remplaçable via ?turn=…&turnuser=…&turnpass=…
@@ -2677,11 +2678,15 @@ $('#btn-clear').addEventListener('click', () => {
   requestRender();
 });
 $('#btn-share').addEventListener('click', async () => {
+  const url = location.href;
+  if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+    try { await navigator.share({ title: 'Tableau blanc', text: `Rejoignez la salle ${ROOM}`, url }); return; } catch (_) { /* annulé : on retombe sur la copie */ }
+  }
   try {
-    await navigator.clipboard.writeText(location.href);
-    $('#btn-share span').textContent = 'Lien copié !';
+    await navigator.clipboard.writeText(url);
+    $('#btn-share span').textContent = 'Lien copié';
   } catch (_) {
-    prompt('Lien de la salle :', location.href);
+    prompt('Lien de la salle :', url);
   }
   setTimeout(() => ($('#btn-share span').textContent = 'Partager'), 1800);
 });
@@ -2794,6 +2799,22 @@ document.addEventListener('touchmove', (ev) => {
 // ---------------------------------------------------------------------------
 // Démarrage
 // ---------------------------------------------------------------------------
+for (const b of document.querySelectorAll('button[title], label[title]')) {
+  if (!b.getAttribute('aria-label') && !b.textContent.trim()) b.setAttribute('aria-label', b.title);
+}
+
+// Mot de bienvenue : une seule fois par navigateur, sur un tableau vide.
+{
+  const welcome = $('#welcome');
+  const seen = (() => { try { return localStorage.getItem('wb-welcomed') === '1'; } catch (_) { return true; } })();
+  const dismiss = () => { welcome.hidden = true; try { localStorage.setItem('wb-welcomed', '1'); } catch (_) { /* ignore */ } };
+  $('#welcome-close').addEventListener('click', dismiss);
+  if (!seen) {
+    setTimeout(() => { if (!state.objects.size) welcome.hidden = false; else dismiss(); }, 1200);
+    window.addEventListener('pointerdown', (ev) => { if (!welcome.hidden && !ev.target.closest('#welcome')) dismiss(); }, { capture: true });
+  }
+}
+
 window.addEventListener('resize', resize);
 resize();
 setTool('pen');
