@@ -2805,17 +2805,6 @@ for (const b of document.querySelectorAll('button[title], label[title]')) {
   if (!b.getAttribute('aria-label') && !b.textContent.trim()) b.setAttribute('aria-label', b.title);
 }
 
-// Mot de bienvenue : une seule fois par navigateur, sur un tableau vide.
-{
-  const welcome = $('#welcome');
-  const seen = (() => { try { return localStorage.getItem('wb-welcomed') === '1'; } catch (_) { return true; } })();
-  const dismiss = () => { welcome.hidden = true; try { localStorage.setItem('wb-welcomed', '1'); } catch (_) { /* ignore */ } };
-  $('#welcome-close').addEventListener('click', dismiss);
-  if (!seen) {
-    setTimeout(() => { if (!state.objects.size) welcome.hidden = false; else dismiss(); }, 1200);
-    window.addEventListener('pointerdown', (ev) => { if (!welcome.hidden && !ev.target.closest('#welcome')) dismiss(); }, { capture: true });
-  }
-}
 
 window.addEventListener('resize', resize);
 resize();
