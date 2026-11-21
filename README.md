@@ -5,7 +5,8 @@ Petite application web de tableau blanc collaboratif, **sans aucun serveur à h�
 - **Dessin à plusieurs en temps réel** (crayon, surligneur, gomme), avec les traits en cours et les curseurs des autres participants.
 - **Texte et LaTeX** : écrivez du texte, entourez les formules de `$…$` (en ligne) ou `$$…$$` (bloc). Rendu avec KaTeX.
 - **PDF** : importez un PDF (bouton ou glisser-déposer), chaque page est posée sur le tableau et vous pouvez **écrire par-dessus**, déplacer et redimensionner les pages. Le fichier est envoyé directement aux autres navigateurs.
-- Canevas infini (déplacement, zoom), sélection/déplacement des objets, annuler/rétablir.
+- Canevas infini (déplacement, zoom), **sélection** d'un ou plusieurs éléments (clic ou lasso rectangulaire) pour les déplacer, les redimensionner par les coins, les dupliquer ou les supprimer, annuler/rétablir.
+- **Pensé pour le tactile** : dessin au doigt ou au stylet (rejet de la paume), pincement pour zoomer, barre d'outils en bas de l'écran sur téléphone, en portrait comme en paysage.
 - **Sauvegarde locale** : chaque navigateur conserve les salles qu'il a visitées (IndexedDB). En rouvrant le lien, vous retrouvez le tableau, et les autres participants connectés le complètent.
 
 ## Comment ça marche sans serveur ?
@@ -53,7 +54,7 @@ Puis ouvrez <http://localhost:3000>. Pour tester à deux sur la même machine, o
 | `Ctrl` + molette | Zoom (la molette seule fait défiler) |
 | `Ctrl+Z` / `Ctrl+Y` | Annuler / rétablir |
 
-Sur tablette : un doigt dessine, deux doigts déplacent et zooment.
+Sur téléphone ou tablette : un doigt dessine (ou sélectionne, avec l'outil flèche), deux doigts déplacent la vue et zooment. Avec l'outil flèche, entourez une zone pour sélectionner les traits qu'elle contient, puis glissez l'ensemble ou tirez un coin pour le redimensionner ; une petite barre « Dupliquer / Supprimer » apparaît au-dessus de la sélection.
 
 ## Structure
 

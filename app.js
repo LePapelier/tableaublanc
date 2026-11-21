@@ -49,7 +49,7 @@ const state = {
   color: PALETTE[0],
   width: 3,
   fontSize: 24,
-  selected: null,
+  selected: new Set(), // ids sélectionnés
   undo: [],
   redo: [],
 };
@@ -60,6 +60,8 @@ const ctx = canvas.getContext('2d');
 const overlay = $('#overlay');
 const cursorsEl = $('#cursors');
 const selectionEl = $('#selection');
+const selbar = $('#selbar');
+const marqueeEl = $('#marquee');
 const editor = $('#editor');
 const stage = $('#stage');
 const hint = $('#hint');
@@ -235,11 +237,21 @@ function handleOp(msg, peerId) {
       const obj = state.objects.get(msg.id);
       if (!obj || (msg.patch.rev || 0) <= (obj.rev || 0)) return;
       Object.assign(obj, msg.patch);
-      if (state.selected === msg.id) updateSelectionBox();
+      if (state.selected.has(msg.id)) updateSelectionBox();
       scheduleSave();
       requestRender();
       break;
     }
+    case 'patch':
+      for (const it of msg.items || []) {
+        const obj = state.objects.get(it.id);
+        if (!obj || (it.patch.rev || 0) <= (obj.rev || 0)) continue;
+        Object.assign(obj, it.patch);
+      }
+      updateSelectionBox();
+      scheduleSave();
+      requestRender();
+      break;
     case 'remove':
       for (const id of msg.ids || []) {
         state.tombstones.set(id, Date.now());
@@ -252,7 +264,7 @@ function handleOp(msg, peerId) {
       for (const id of state.objects.keys()) state.tombstones.set(id, Date.now());
       state.objects.clear();
       overlay.replaceChildren();
-      selectObject(null);
+      setSelection([]);
       scheduleSave();
       requestRender();
       break;
@@ -265,7 +277,7 @@ function handleOp(msg, peerId) {
 function removeObjectLocal(id) {
   state.objects.delete(id);
   overlay.querySelector(`[data-id="${id}"]`)?.remove();
-  if (state.selected === id) selectObject(null);
+  if (state.selected.delete(id)) updateSelectionBox();
 }
 
 function applyOp(op, record = true) {
@@ -293,6 +305,18 @@ function applyOp(op, record = true) {
       broadcast('op', { t: 'update', id: op.id, patch: { ...op.after, rev: obj.rev } });
       break;
     }
+    case 'patch': {
+      const items = [];
+      for (const it of op.items) {
+        const obj = state.objects.get(it.id);
+        if (!obj) continue;
+        restore(obj, it.after);
+        obj.rev = (obj.rev || 0) + 1;
+        items.push({ id: it.id, patch: { ...it.after, rev: obj.rev } });
+      }
+      if (items.length) broadcast('op', { t: 'patch', items });
+      break;
+    }
   }
   if (record) recordOp(op);
   scheduleSave();
@@ -300,9 +324,12 @@ function applyOp(op, record = true) {
 }
 
 // Envoi d'une mise à jour transitoire (déplacement en cours) sans l'enregistrer dans l'historique.
-function pushLive(obj) {
-  obj.rev = (obj.rev || 0) + 1;
-  broadcast('op', { t: 'update', id: obj.id, patch: { ...snapshot(obj), rev: obj.rev } });
+function pushLive(objs) {
+  const items = objs.map((obj) => {
+    obj.rev = (obj.rev || 0) + 1;
+    return { id: obj.id, patch: { ...snapshot(obj), rev: obj.rev } };
+  });
+  broadcast('op', { t: 'patch', items });
 }
 
 function recordOp(op) {
@@ -317,6 +344,7 @@ function invert(op) {
     case 'add': return { t: 'remove', objs: op.objs };
     case 'remove': return { t: 'add', objs: op.objs };
     case 'update': return { t: 'update', id: op.id, before: op.after, after: op.before };
+    case 'patch': return { t: 'patch', items: op.items.map((it) => ({ id: it.id, before: it.after, after: it.before })) };
   }
 }
 
@@ -443,9 +471,8 @@ function sortedObjects() {
   return [...state.objects.values()].sort((a, b) => (Z[a.type] - Z[b.type]) || ((a.ts || 0) - (b.ts || 0)));
 }
 
-function hitTest(wx, wy) {
+function hitTest(wx, wy, tol = 6 / state.view.scale) {
   const objs = sortedObjects().reverse();
-  const tol = 6 / state.view.scale;
   for (const obj of objs) {
     if (obj.type === 'stroke') {
       if (strokeHit(obj, wx, wy, tol)) return obj;
@@ -786,24 +813,91 @@ editor.addEventListener('keydown', (ev) => {
 editor.addEventListener('blur', () => setTimeout(() => { if (editing && !editor.hidden) closeEditor(true); }, 0));
 
 // ---------------------------------------------------------------------------
-// Sélection
+// Sélection (plusieurs objets, déplacement, redimensionnement)
 // ---------------------------------------------------------------------------
-function selectObject(id) {
-  state.selected = id;
+function setSelection(ids) {
+  state.selected = new Set(ids);
   updateSelectionBox();
 }
 
+function selectedObjects() {
+  const out = [];
+  for (const id of state.selected) {
+    const o = state.objects.get(id);
+    if (o) out.push(o); else state.selected.delete(id);
+  }
+  return out;
+}
+
+function unionBounds(objs) {
+  let b = null;
+  for (const o of objs) {
+    const bb = bbox(o);
+    if (!bb) continue;
+    if (!b) b = { ...bb };
+    else {
+      const x2 = Math.max(b.x + b.w, bb.x + bb.w), y2 = Math.max(b.y + b.h, bb.y + bb.h);
+      b.x = Math.min(b.x, bb.x); b.y = Math.min(b.y, bb.y);
+      b.w = x2 - b.x; b.h = y2 - b.y;
+    }
+  }
+  return b;
+}
+
+function selectionBounds() {
+  const objs = selectedObjects();
+  return objs.length ? unionBounds(objs) : null;
+}
+
 function updateSelectionBox() {
-  const obj = state.selected && state.objects.get(state.selected);
-  const b = obj && bbox(obj);
-  if (!b) { selectionEl.hidden = true; return; }
+  const b = selectionBounds();
+  if (!b) { selectionEl.hidden = true; selbar.hidden = true; return; }
   const [sx, sy] = toScreen(b.x, b.y);
+  const w = b.w * state.view.scale, h = b.h * state.view.scale;
   selectionEl.hidden = false;
   selectionEl.style.left = sx - 4 + 'px';
   selectionEl.style.top = sy - 4 + 'px';
-  selectionEl.style.width = b.w * state.view.scale + 8 + 'px';
-  selectionEl.style.height = b.h * state.view.scale + 8 + 'px';
-  selectionEl.querySelector('.handle').hidden = obj.type === 'stroke';
+  selectionEl.style.width = w + 8 + 'px';
+  selectionEl.style.height = h + 8 + 'px';
+  // Barre d'actions au-dessus de la sélection (ou en dessous si pas la place)
+  selbar.hidden = !!drag && drag.kind !== 'none';
+  const bw = selbar.offsetWidth || 160;
+  const top = sy - 52 < 70 ? sy + h + 14 : sy - 52;
+  selbar.style.left = clamp(sx + w / 2 - bw / 2, 8, window.innerWidth - bw - 8) + 'px';
+  selbar.style.top = clamp(top, 70, window.innerHeight - 60) + 'px';
+}
+
+// Poignée de coin proche du point écran (sx, sy) ; renvoie l'ancre opposée en coordonnées monde.
+function cornerAt(sx, sy, tol) {
+  const b = selectionBounds();
+  if (!b) return null;
+  const corners = [
+    { c: [b.x, b.y], a: [b.x + b.w, b.y + b.h] },
+    { c: [b.x + b.w, b.y], a: [b.x, b.y + b.h] },
+    { c: [b.x, b.y + b.h], a: [b.x + b.w, b.y] },
+    { c: [b.x + b.w, b.y + b.h], a: [b.x, b.y] },
+  ];
+  for (const k of corners) {
+    const [cx, cy] = toScreen(k.c[0], k.c[1]);
+    if (dist(sx, sy, cx, cy) <= tol) return { corner: k.c, anchor: k.a };
+  }
+  return null;
+}
+
+function insideBounds(b, wx, wy, margin = 0) {
+  return b && wx >= b.x - margin && wx <= b.x + b.w + margin && wy >= b.y - margin && wy <= b.y + b.h + margin;
+}
+
+function snapshot(obj) {
+  switch (obj.type) {
+    case 'stroke': return { points: obj.points.slice(), width: obj.width };
+    case 'pdf': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h };
+    default: return { x: obj.x, y: obj.y, size: obj.size };
+  }
+}
+
+function restore(obj, snap) {
+  for (const [k, v] of Object.entries(snap)) obj[k] = Array.isArray(v) ? v.slice() : v;
 }
 
 function moveObject(obj, dx, dy) {
@@ -815,21 +909,78 @@ function moveObject(obj, dx, dy) {
   }
 }
 
-function snapshot(obj) {
-  return obj.type === 'stroke' ? { points: obj.points.slice() } : obj.type === 'pdf'
-    ? { x: obj.x, y: obj.y, w: obj.w, h: obj.h } : { x: obj.x, y: obj.y, size: obj.size };
+// Homothétie de centre (ax, ay) et de rapport f.
+function scaleObject(obj, ax, ay, f) {
+  if (obj.type === 'stroke') {
+    const p = obj.points;
+    for (let i = 0; i < p.length; i += 2) {
+      p[i] = ax + (p[i] - ax) * f;
+      p[i + 1] = ay + (p[i + 1] - ay) * f;
+    }
+    obj.width = clamp(obj.width * f, 0.5, 200);
+  } else {
+    obj.x = ax + (obj.x - ax) * f;
+    obj.y = ay + (obj.y - ay) * f;
+    if (obj.type === 'pdf') { obj.w *= f; obj.h *= f; }
+    else obj.size = clamp(obj.size * f, 6, 400);
+  }
 }
 
+function patchOp(objs, before) {
+  return { t: 'patch', items: objs.map((o) => ({ id: o.id, before: before.get(o.id), after: snapshot(o) })) };
+}
+
+function deleteSelection() {
+  const objs = selectedObjects();
+  if (objs.length) applyOp({ t: 'remove', objs });
+}
+
+function duplicateSelection() {
+  const objs = selectedObjects();
+  if (!objs.length) return;
+  const off = 24 / state.view.scale;
+  const clones = objs.map((o) => {
+    const c = JSON.parse(JSON.stringify(o));
+    c.id = uid(); c.ts = Date.now(); c.rev = 0;
+    moveObject(c, off, off);
+    return c;
+  });
+  applyOp({ t: 'add', objs: clones });
+  setSelection(clones.map((c) => c.id));
+}
+
+// Objets touchés par un rectangle : traits dont un point est dedans, textes et PDF entièrement contenus.
+function objectsInRect(r) {
+  const out = [];
+  for (const obj of state.objects.values()) {
+    if (obj.type === 'stroke') {
+      const p = obj.points;
+      for (let i = 0; i < p.length; i += 2) {
+        if (p[i] >= r.x && p[i] <= r.x + r.w && p[i + 1] >= r.y && p[i + 1] <= r.y + r.h) { out.push(obj); break; }
+      }
+    } else {
+      const b = bbox(obj);
+      if (b && b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h) out.push(obj);
+    }
+  }
+  return out;
+}
+
+$('#sel-del').addEventListener('click', deleteSelection);
+$('#sel-dup').addEventListener('click', duplicateSelection);
+
 // ---------------------------------------------------------------------------
-// Pointeur
+// Pointeur (souris, doigt, stylet)
 // ---------------------------------------------------------------------------
 let currentStroke = null;
 let drag = null;
 const pointers = new Map();
 let pinch = null;
 let spaceDown = false;
+let penDown = false;
 let lastDraftSent = 0;
 let lastCursorSent = 0;
+let lastLiveSent = 0;
 
 function effectiveTool(ev) {
   if (spaceDown || ev.button === 1) return 'hand';
@@ -837,21 +988,30 @@ function effectiveTool(ev) {
 }
 
 canvas.addEventListener('pointerdown', (ev) => {
+  // Rejet de la paume : un doigt posé pendant qu'un stylet écrit est ignoré.
+  if (ev.pointerType === 'touch' && penDown) return;
+  if (ev.pointerType === 'pen') penDown = true;
+  ev.preventDefault(); // pas d'événements souris synthétiques après un toucher (ils voleraient le focus)
   if (editing) closeEditor(true);
   canvas.setPointerCapture(ev.pointerId);
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
   if (pointers.size === 2) {
     cancelCurrentStroke();
+    if (drag && drag.before) for (const o of drag.objs) restore(o, drag.before.get(o.id)); // annule le geste en cours
     drag = null;
+    marqueeEl.hidden = true;
     const [a, b] = [...pointers.values()];
     pinch = { d: dist(a.x, a.y, b.x, b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+    requestRender();
     return;
   }
   if (pointers.size > 1) return;
 
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
   const tool = effectiveTool(ev);
+  const touch = ev.pointerType === 'touch';
+  const tolPx = touch ? 16 : 6;
 
   if (tool === 'hand') {
     drag = { kind: 'pan', sx: ev.clientX, sy: ev.clientY, tx: state.view.tx, ty: state.view.ty };
@@ -871,36 +1031,53 @@ canvas.addEventListener('pointerdown', (ev) => {
   }
 
   if (tool === 'eraser') {
-    drag = { kind: 'erase', removed: [] };
+    drag = { kind: 'erase', removed: [], touch };
     eraseAt(wx, wy, drag);
     return;
   }
 
   if (tool === 'text') {
     // Ouvert au relâchement : sinon le focus repart vers le canvas et ferme l'éditeur.
-    const hit = hitTest(wx, wy);
+    const hit = hitTest(wx, wy, tolPx / state.view.scale);
     drag = { kind: 'text', wx, wy, hit: hit && hit.type === 'text' ? hit : null };
     return;
   }
 
   if (tool === 'select') {
-    const sel = state.selected && state.objects.get(state.selected);
-    if (sel && sel.type !== 'stroke') {
-      const b = bbox(sel);
-      const [hx, hy] = toScreen(b.x + b.w, b.y + b.h);
-      if (dist(ev.clientX, ev.clientY, hx + 4, hy + 4) < 14) {
-        drag = { kind: 'resize', obj: sel, before: snapshot(sel), b0: { ...b } };
+    const sel = selectedObjects();
+    if (sel.length) {
+      const c = cornerAt(ev.clientX, ev.clientY, touch ? 28 : 14);
+      if (c) {
+        const before = new Map(sel.map((o) => [o.id, snapshot(o)]));
+        drag = { kind: 'resize', objs: sel, before, anchor: c.anchor, d0: Math.max(1e-6, dist(c.corner[0], c.corner[1], c.anchor[0], c.anchor[1])) };
+        selbar.hidden = true;
+        return;
+      }
+      if (insideBounds(selectionBounds(), wx, wy, tolPx / state.view.scale)) {
+        drag = { kind: 'move', objs: sel, before: new Map(sel.map((o) => [o.id, snapshot(o)])), x0: wx, y0: wy, moved: false };
         return;
       }
     }
-    const hit = hitTest(wx, wy);
-    selectObject(hit ? hit.id : null);
-    if (hit) drag = { kind: 'move', obj: hit, before: snapshot(hit), lx: wx, ly: wy, moved: false };
-    else drag = { kind: 'pan', sx: ev.clientX, sy: ev.clientY, tx: state.view.tx, ty: state.view.ty };
+    const hit = hitTest(wx, wy, tolPx / state.view.scale);
+    if (hit) {
+      if (ev.shiftKey) {
+        if (state.selected.has(hit.id)) state.selected.delete(hit.id); else state.selected.add(hit.id);
+        updateSelectionBox();
+      } else if (!state.selected.has(hit.id)) {
+        setSelection([hit.id]);
+      }
+      const objs = selectedObjects();
+      drag = { kind: 'move', objs, before: new Map(objs.map((o) => [o.id, snapshot(o)])), x0: wx, y0: wy, moved: false };
+    } else {
+      const keep = ev.shiftKey ? [...state.selected] : [];
+      if (!ev.shiftKey) setSelection([]);
+      drag = { kind: 'marquee', x0: wx, y0: wy, keep, sx: ev.clientX, sy: ev.clientY };
+    }
   }
 });
 
 canvas.addEventListener('pointermove', (ev) => {
+  if (ev.pointerType === 'touch' && penDown) return;
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
   if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
@@ -921,7 +1098,10 @@ canvas.addEventListener('pointermove', (ev) => {
     return;
   }
   if (!drag) {
-    if (state.tool === 'select') canvas.style.cursor = hitTest(wx, wy) ? 'move' : 'default';
+    if (state.tool === 'select' && ev.pointerType !== 'touch') {
+      const c = cornerAt(ev.clientX, ev.clientY, 14);
+      canvas.style.cursor = c ? 'nwse-resize' : insideBounds(selectionBounds(), wx, wy) || hitTest(wx, wy) ? 'move' : 'default';
+    }
     return;
   }
 
@@ -933,9 +1113,16 @@ canvas.addEventListener('pointermove', (ev) => {
       break;
     case 'draw': {
       const p = currentStroke.points;
-      const n = p.length;
-      if (dist(p[n - 2], p[n - 1], wx, wy) * state.view.scale < 1.5) return;
-      p.push(wx, wy);
+      const events = ev.getCoalescedEvents ? ev.getCoalescedEvents() : [ev];
+      let added = false;
+      for (const e of events.length ? events : [ev]) {
+        const [x, y] = toWorld(e.clientX, e.clientY);
+        const n = p.length;
+        if (dist(p[n - 2], p[n - 1], x, y) * state.view.scale < 1.2) continue;
+        p.push(x, y);
+        added = true;
+      }
+      if (!added) return;
       if (now - lastDraftSent > 60) {
         lastDraftSent = now;
         broadcast('draft', currentStroke);
@@ -946,22 +1133,31 @@ canvas.addEventListener('pointermove', (ev) => {
     case 'erase':
       eraseAt(wx, wy, drag);
       break;
+    case 'marquee': {
+      const x = Math.min(drag.sx, ev.clientX), y = Math.min(drag.sy, ev.clientY);
+      marqueeEl.hidden = false;
+      marqueeEl.style.left = x + 'px';
+      marqueeEl.style.top = y + 'px';
+      marqueeEl.style.width = Math.abs(ev.clientX - drag.sx) + 'px';
+      marqueeEl.style.height = Math.abs(ev.clientY - drag.sy) + 'px';
+      break;
+    }
     case 'move': {
-      const dx = wx - drag.lx, dy = wy - drag.ly;
+      const dx = wx - drag.x0, dy = wy - drag.y0;
       if (!drag.moved && Math.hypot(dx, dy) * state.view.scale < 3) return;
       drag.moved = true;
-      moveObject(drag.obj, dx, dy);
-      drag.lx = wx; drag.ly = wy;
-      pushLive(drag.obj);
+      selbar.hidden = true;
+      for (const o of drag.objs) { restore(o, drag.before.get(o.id)); moveObject(o, dx, dy); }
+      if (now - lastLiveSent > 80) { lastLiveSent = now; pushLive(drag.objs); }
       requestRender();
       break;
     }
     case 'resize': {
-      const obj = drag.obj, b0 = drag.b0;
-      const f = Math.max(0.05, ((wx - b0.x) / b0.w + (wy - b0.y) / b0.h) / 2);
-      if (obj.type === 'pdf') { obj.w = b0.w * f; obj.h = b0.h * f; }
-      else obj.size = clamp(drag.before.size * f, 6, 400);
-      pushLive(obj);
+      const [ax, ay] = drag.anchor;
+      const f = Math.max(0.02, dist(wx, wy, ax, ay) / drag.d0);
+      for (const o of drag.objs) { restore(o, drag.before.get(o.id)); scaleObject(o, ax, ay, f); }
+      drag.moved = true;
+      if (now - lastLiveSent > 80) { lastLiveSent = now; pushLive(drag.objs); }
       requestRender();
       break;
     }
@@ -969,6 +1165,8 @@ canvas.addEventListener('pointermove', (ev) => {
 });
 
 function endPointer(ev) {
+  if (ev.pointerType === 'pen') penDown = false;
+  if (!pointers.has(ev.pointerId)) return;
   pointers.delete(ev.pointerId);
   if (pinch) {
     if (pointers.size < 2) pinch = null;
@@ -994,17 +1192,21 @@ function endPointer(ev) {
     case 'erase':
       if (d.removed.length) recordOp({ t: 'remove', objs: d.removed });
       break;
-    case 'move':
-      if (d.moved) {
-        recordOp({ t: 'update', id: d.obj.id, before: d.before, after: snapshot(d.obj) });
-        scheduleSave();
+    case 'marquee': {
+      marqueeEl.hidden = true;
+      const [wx, wy] = toWorld(ev.clientX, ev.clientY);
+      const r = { x: Math.min(d.x0, wx), y: Math.min(d.y0, wy), w: Math.abs(wx - d.x0), h: Math.abs(wy - d.y0) };
+      if (r.w * state.view.scale > 4 || r.h * state.view.scale > 4) {
+        setSelection([...d.keep, ...objectsInRect(r).map((o) => o.id)]);
       }
       break;
+    }
+    case 'move':
     case 'resize':
-      recordOp({ t: 'update', id: d.obj.id, before: d.before, after: snapshot(d.obj) });
-      scheduleSave();
+      if (d.moved) applyOp(patchOp(d.objs, d.before));
       break;
   }
+  updateSelectionBox();
   requestRender();
 }
 canvas.addEventListener('pointerup', endPointer);
@@ -1019,7 +1221,7 @@ function cancelCurrentStroke() {
 }
 
 function eraseAt(wx, wy, d) {
-  const radius = Math.max(8, state.width * 2) / state.view.scale;
+  const radius = Math.max(d.touch ? 14 : 8, state.width * 2) / state.view.scale;
   const hit = [];
   for (const obj of state.objects.values()) {
     if (obj.type === 'stroke' && strokeHit(obj, wx, wy, radius)) hit.push(obj);
@@ -1128,14 +1330,19 @@ function setTool(tool) {
   $('#width').hidden = !(tool === 'pen' || tool === 'marker' || tool === 'eraser');
   $('#font-size').hidden = tool !== 'text';
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || tool === 'select';
-  if (tool !== 'select') selectObject(null);
-  setHint({
-    pen: '', marker: '',
+  if (tool !== 'select') setSelection([]);
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  setHint((coarse ? {
     eraser: 'Glisser sur un trait pour l’effacer',
-    text: 'Cliquer pour écrire · $…$ = LaTeX en ligne · $$…$$ = bloc',
-    select: 'Cliquer pour sélectionner, glisser pour déplacer, Suppr pour effacer · double-clic : texte',
+    text: 'Toucher pour écrire · $…$ = LaTeX',
+    select: 'Toucher un trait ou entourer une zone · glisser pour déplacer · coins pour redimensionner',
+    hand: 'Glisser pour déplacer la vue · deux doigts : zoom',
+  } : {
+    eraser: 'Glisser sur un trait pour l’effacer',
+    text: 'Cliquer pour écrire · $…$ = LaTeX en ligne · $…$ = bloc',
+    select: 'Cliquer ou entourer pour sélectionner · glisser pour déplacer · coins pour redimensionner · Suppr efface · double-clic : texte',
     hand: 'Glisser pour déplacer la vue · Ctrl + molette : zoom',
-  }[tool] || '');
+  })[tool] || '');
 }
 
 function setHint(text) { hint.textContent = text; }
@@ -1164,16 +1371,16 @@ for (const c of PALETTE) {
 function setColor(c) {
   state.color = c;
   colorsEl.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s.dataset.color === c));
-  const sel = state.selected && state.objects.get(state.selected);
-  if (sel && sel.type !== 'pdf') applyOp({ t: 'update', id: sel.id, before: { color: sel.color }, after: { color: c } });
+  const objs = selectedObjects().filter((o) => o.type !== 'pdf');
+  if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { color: o.color }, after: { color: c } })) });
 }
 setColor(state.color);
 
 $('#width').addEventListener('input', (ev) => { state.width = Number(ev.target.value); });
 $('#font-size').addEventListener('input', (ev) => {
   state.fontSize = Number(ev.target.value);
-  const sel = state.selected && state.objects.get(state.selected);
-  if (sel && sel.type === 'text') applyOp({ t: 'update', id: sel.id, before: { size: sel.size }, after: { size: state.fontSize } });
+  const objs = selectedObjects().filter((o) => o.type === 'text');
+  if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { size: o.size }, after: { size: state.fontSize } })) });
 });
 
 $('#btn-undo').addEventListener('click', undo);
@@ -1188,7 +1395,7 @@ $('#btn-clear').addEventListener('click', () => {
   for (const obj of objs) state.tombstones.set(obj.id, Date.now());
   state.objects.clear();
   overlay.replaceChildren();
-  selectObject(null);
+  setSelection([]);
   broadcast('op', { t: 'clear' });
   recordOp({ t: 'remove', objs });
   scheduleSave();
@@ -1214,11 +1421,26 @@ $('#btn-name').addEventListener('click', () => {
 });
 $('#room-label').textContent = 'salle ' + ROOM;
 
+const menu = $('#menu');
+$('#btn-menu').addEventListener('click', (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; });
+menu.addEventListener('click', (ev) => {
+  const target = ev.target.closest('[data-action]');
+  if (!target) return;
+  menu.hidden = true;
+  $(target.dataset.action).click();
+});
+window.addEventListener('pointerdown', (ev) => { if (!menu.hidden && !ev.target.closest('#menu, #btn-menu')) menu.hidden = true; });
+window.addEventListener('resize', () => updateSelectionBox());
+// Hauteur réelle de la barre d'outils (variable CSS) pour placer l'infobulle au-dessus sur mobile.
+new ResizeObserver(() => document.documentElement.style.setProperty('--toolbar-h', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar'));
+
 window.addEventListener('keydown', (ev) => {
   if (editing || /^(INPUT|TEXTAREA)$/.test(ev.target.tagName)) return;
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); return; }
   if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); redo(); return; }
+  if (mod && ev.key.toLowerCase() === 'a') { ev.preventDefault(); setTool('select'); setSelection([...state.objects.keys()]); return; }
+  if (mod && ev.key.toLowerCase() === 'd') { ev.preventDefault(); duplicateSelection(); return; }
   if (mod) return;
   switch (ev.key) {
     case ' ':
@@ -1231,12 +1453,9 @@ window.addEventListener('keydown', (ev) => {
     case 'e': case 'E': case 'g': case 'G': setTool('eraser'); break;
     case 't': case 'T': setTool('text'); break;
     case 'm': case 'M': setTool('hand'); break;
-    case 'Delete': case 'Backspace': {
-      const sel = state.selected && state.objects.get(state.selected);
-      if (sel) applyOp({ t: 'remove', objs: [sel] });
-      break;
-    }
-    case 'Escape': selectObject(null); break;
+    case 'Delete': case 'Backspace': deleteSelection(); break;
+
+    case 'Escape': setSelection([]); break;
   }
 });
 window.addEventListener('keyup', (ev) => {

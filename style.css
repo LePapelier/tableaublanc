@@ -13,6 +13,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body {
   margin: 0;
@@ -27,6 +28,9 @@ html, body {
   position: fixed;
   inset: 0;
   touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #board {
@@ -88,14 +92,54 @@ html, body {
 }
 #selection .handle {
   position: absolute;
-  right: -7px;
-  bottom: -7px;
   width: 12px;
   height: 12px;
   background: white;
   border: 1.5px solid var(--accent);
   border-radius: 3px;
 }
+#selection .nw { left: -7px; top: -7px; }
+#selection .ne { right: -7px; top: -7px; }
+#selection .sw { left: -7px; bottom: -7px; }
+#selection .se { right: -7px; bottom: -7px; }
+
+#marquee {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: rgba(59, 130, 246, 0.08);
+  pointer-events: none;
+}
+
+#selbar {
+  position: fixed;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 4;
+}
+
+#menu {
+  position: fixed;
+  top: 60px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 6px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 6;
+}
+#menu button { justify-content: flex-start; height: 40px; padding: 0 12px; font-size: 14px; }
+.compact-only { display: none !important; }
 
 #editor {
   position: absolute;
@@ -191,12 +235,14 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
   align-items: center;
   gap: 2px;
   padding: 8px;
+  z-index: 3;
   background: var(--panel);
   backdrop-filter: blur(10px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
+#toolbar .tools { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 #toolbar .sep { width: 24px; height: 1px; margin: 4px 0; }
 .tool {
   width: 40px;
@@ -291,8 +337,59 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
   pointer-events: none;
 }
 
-@media (max-width: 700px) {
-  .brand, #room-label, #btn-name { display: none; }
-  #topbar { gap: 6px; }
-  #toolbar { left: 8px; }
+/* ----- Écrans compacts (téléphone en portrait ou en paysage) ----- */
+@media (max-width: 760px), (max-height: 520px) {
+  .compact-only { display: inline-flex !important; }
+  .brand, #room-label, #btn-name, #btn-clear, #btn-zoom-in, #btn-zoom-out, #topbar .sep, #topbar .group:first-child { display: none; }
+  #topbar { top: calc(8px + env(safe-area-inset-top)); left: 8px; right: 8px; gap: 6px; }
+  #topbar .group { padding: 4px 6px; }
+  button.icon { width: 38px; height: 38px; }
+  button.text { height: 38px; }
+
+  #toolbar {
+    left: 50%;
+    right: auto;
+    top: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    flex-direction: column-reverse;
+    max-width: calc(100vw - 16px);
+    padding: 6px;
+    gap: 0;
+  }
+  #toolbar .tools { flex-direction: row; gap: 0; }
+  #toolbar .tools .sep { width: 1px; height: 24px; margin: 0 4px; }
+  .tool { width: 44px; height: 44px; }
+  .tool svg { width: 24px; height: 24px; }
+
+  #options {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 6px;
+    padding: 0 4px 8px;
+    border-top: none;
+    border-bottom: 1px solid var(--border);
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  #colors { display: flex; gap: 10px; }
+  .swatch { width: 26px; height: 26px; }
+  #options input[type=range] {
+    writing-mode: horizontal-tb;
+    direction: ltr;
+    width: 110px;
+    height: 26px;
+  }
+
+  #selection .handle { width: 18px; height: 18px; border-radius: 50%; }
+  #selection .nw { left: -10px; top: -10px; }
+  #selection .ne { right: -10px; top: -10px; }
+  #selection .sw { left: -10px; bottom: -10px; }
+  #selection .se { right: -10px; bottom: -10px; }
+
+  #hint { bottom: calc(var(--toolbar-h, 64px) + 22px + env(safe-area-inset-bottom)); max-width: calc(100vw - 24px); white-space: normal; text-align: center; font-size: 12px; }
+  #status { top: calc(58px + env(safe-area-inset-top)); font-size: 12px; max-width: calc(100vw - 24px); text-align: center; }
+  #editor { width: min(360px, calc(100vw - 24px)); }
 }
+

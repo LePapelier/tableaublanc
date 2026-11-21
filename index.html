@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Tableau blanc</title>
   <link rel="stylesheet" href="./vendor/katex/katex.min.css">
   <link rel="stylesheet" href="./style.css">
@@ -13,8 +13,16 @@
     <canvas id="board"></canvas>
     <div id="overlay"></div>
     <div id="cursors"></div>
-    <div id="selection" hidden><div class="handle"></div></div>
+    <div id="marquee" hidden></div>
+    <div id="selection" hidden>
+      <div class="handle nw"></div><div class="handle ne"></div><div class="handle sw"></div><div class="handle se"></div>
+    </div>
     <textarea id="editor" hidden spellcheck="false" placeholder="Texte… $x^2$ pour du LaTeX, $$…$$ pour un bloc"></textarea>
+  </div>
+
+  <div id="selbar" hidden>
+    <button id="sel-dup" class="text" title="Dupliquer (Ctrl+D)">Dupliquer</button>
+    <button id="sel-del" class="text danger" title="Supprimer (Suppr)">Supprimer</button>
   </div>
 
   <header id="topbar">
@@ -36,10 +44,17 @@
       <div id="users" title="Participants"></div>
       <button id="btn-name" class="text" title="Changer de nom">Moi</button>
       <button id="btn-share" class="text primary" title="Copier le lien de la salle">Partager</button>
+      <button id="btn-menu" class="icon compact-only" title="Menu">⋯</button>
+    </div>
+    <div id="menu" hidden>
+      <button data-action="#btn-name">Changer de nom</button>
+      <button data-action="#btn-zoom-fit">Tout afficher</button>
+      <button data-action="#btn-clear" class="danger">Tout effacer</button>
     </div>
   </header>
 
   <nav id="toolbar">
+    <div class="tools">
     <button class="tool" data-tool="select" title="Sélection (V)">
       <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-3 6z"/></svg>
     </button>
@@ -63,6 +78,7 @@
       <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 14h6M9 17h6"/></svg>
       <input id="pdf-input" type="file" accept="application/pdf" multiple hidden>
     </label>
+    </div>
 
     <div id="options">
       <div id="colors"></div>
