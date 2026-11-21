@@ -20,6 +20,10 @@ html, body {
   height: 100%;
   overflow: hidden;
   touch-action: none;
+  /* Interface non sélectionnable : sur iOS, un appui long sélectionnait boutons et icônes comme du texte. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   background: var(--bg);
   color: var(--text);
   overscroll-behavior: none;
@@ -304,7 +308,7 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 .tool.disabled { opacity: .35; pointer-events: none; }
 body.readonly #board { cursor: not-allowed; }
 #users-list li.room { color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border); margin-bottom: 4px; padding-bottom: 8px; }
-#users-list li.room code { font-size: 13px; color: var(--text); background: #f1f3f6; padding: 1px 6px; border-radius: 4px; }
+#users-list li.room code { font-size: 13px; color: var(--text); background: #f1f3f6; padding: 1px 6px; border-radius: 4px; user-select: text; -webkit-user-select: text; }
 #users-list .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
 #users .avatar {
   width: 26px;
@@ -547,6 +551,8 @@ body.readonly #board { cursor: not-allowed; }
 #preamble-dialog p { margin: 0 0 10px; line-height: 1.4; }
 #preamble-dialog code { font-size: 12px; background: #f1f3f6; padding: 1px 4px; border-radius: 4px; }
 #preamble-text {
+  user-select: text;
+  -webkit-user-select: text;
   width: 100%;
   min-height: 160px;
   resize: vertical;
