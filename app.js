@@ -435,16 +435,49 @@ function bbox(obj) {
       return { x: minX - r, y: minY - r, w: maxX - minX + 2 * r, h: maxY - minY + 2 * r };
     }
     case 'pdf':
-      return { x: obj.x, y: obj.y, w: obj.w, h: obj.h };
+      return rotatedBounds(obj.x, obj.y, obj.w, obj.h, obj.rot || 0);
     case 'text': {
-      const el = overlay.querySelector(`[data-id="${obj.id}"]`);
-      const k = obj.size / 16; // le div est rendu à 16px puis mis à l'échelle
-      const w = el ? el.offsetWidth * k : 100;
-      const h = el ? el.offsetHeight * k : obj.size * 1.5;
-      return { x: obj.x, y: obj.y, w, h };
+      const [w, h] = textSize(obj);
+      return rotatedBounds(obj.x, obj.y, w, h, obj.rot || 0);
     }
   }
   return null;
+}
+
+function textSize(obj) {
+  const el = overlay.querySelector(`[data-id="${obj.id}"]`);
+  const k = obj.size / 16; // le div est rendu à 16px puis mis à l'échelle
+  return [el ? el.offsetWidth * k : 100, el ? el.offsetHeight * k : obj.size * 1.5];
+}
+
+// Coins d'un rectangle (x, y, w, h) tourné de rot autour de (x, y).
+function rectCorners(x, y, w, h, rot) {
+  const c = Math.cos(rot), s = Math.sin(rot);
+  return [[x, y], [x + w * c, y + w * s], [x + w * c - h * s, y + w * s + h * c], [x - h * s, y + h * c]];
+}
+
+function rotatedBounds(x, y, w, h, rot) {
+  if (!rot) return { x, y, w, h };
+  const pts = rectCorners(x, y, w, h, rot);
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  return { x: minX, y: minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY };
+}
+
+// Taille (w, h) et coins d'un objet rectangulaire (texte ou PDF).
+function objectRect(obj) {
+  const [w, h] = obj.type === 'pdf' ? [obj.w, obj.h] : textSize(obj);
+  return { w, h, corners: rectCorners(obj.x, obj.y, w, h, obj.rot || 0) };
+}
+
+// Le point (wx, wy) est-il dans le rectangle tourné de l'objet (avec une marge) ?
+function rectHit(obj, wx, wy, tol) {
+  const { w, h } = objectRect(obj);
+  const rot = obj.rot || 0;
+  const dx = wx - obj.x, dy = wy - obj.y;
+  const c = Math.cos(-rot), s = Math.sin(-rot);
+  const lx = dx * c - dy * s, ly = dx * s + dy * c;
+  return lx >= -tol && lx <= w + tol && ly >= -tol && ly <= h + tol;
 }
 
 function strokeHit(obj, wx, wy, radius) {
@@ -476,9 +509,8 @@ function hitTest(wx, wy, tol = 6 / state.view.scale) {
   for (const obj of objs) {
     if (obj.type === 'stroke') {
       if (strokeHit(obj, wx, wy, tol)) return obj;
-    } else {
-      const b = bbox(obj);
-      if (b && wx >= b.x - tol && wx <= b.x + b.w + tol && wy >= b.y - tol && wy <= b.y + b.h + tol) return obj;
+    } else if (rectHit(obj, wx, wy, tol)) {
+      return obj;
     }
   }
   return null;
@@ -530,6 +562,7 @@ function render() {
   }
   for (const draft of state.drafts.values()) drawStroke(draft);
   if (currentStroke) drawStroke(currentStroke);
+  if (drag && drag.kind === 'lasso' && drag.pts.length > 4) drawLasso(drag.pts);
 
   for (const el of [...overlay.children]) {
     if (!seen.has(el.dataset.id)) el.remove();
@@ -540,6 +573,21 @@ function render() {
   for (const c of cursorsEl.children) c.style.transform = `translate(${c.dataset.x}px, ${c.dataset.y}px) scale(${1 / scale})`;
   updateSelectionBox();
   $('#btn-zoom-fit').textContent = Math.round(scale * 100) + ' %';
+}
+
+function drawLasso(pts) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(pts[0], pts[1]);
+  for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(59, 130, 246, 0.08)';
+  ctx.fill();
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 1.5 / state.view.scale;
+  ctx.setLineDash([6 / state.view.scale, 4 / state.view.scale]);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawGrid(W, H) {
@@ -643,10 +691,13 @@ function getPdfDoc(fileId) {
 }
 
 function drawPdf(obj) {
+  ctx.save();
+  ctx.translate(obj.x, obj.y);
+  if (obj.rot) ctx.rotate(obj.rot);
   ctx.fillStyle = 'white';
   ctx.shadowColor = 'rgba(0,0,0,.15)';
   ctx.shadowBlur = 12 / state.view.scale;
-  ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+  ctx.fillRect(0, 0, obj.w, obj.h);
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
 
@@ -671,15 +722,16 @@ function drawPdf(obj) {
   }
 
   if (img && img !== 'pending' && img !== 'error') {
-    ctx.drawImage(img, obj.x, obj.y, obj.w, obj.h);
+    ctx.drawImage(img, 0, 0, obj.w, obj.h);
   } else {
     const missing = !files.has(obj.fileId) && pageCache.get(`${obj.id}@missing`) === 'error';
     ctx.fillStyle = '#9ca3af';
     ctx.font = `${Math.max(12, obj.w / 30)}px system-ui`;
     ctx.textAlign = 'center';
-    ctx.fillText(missing ? 'PDF indisponible (aucun participant ne l’a)' : img === 'error' ? 'PDF illisible' : 'Réception du PDF…', obj.x + obj.w / 2, obj.y + obj.h / 2);
+    ctx.fillText(missing ? 'PDF indisponible (aucun participant ne l’a)' : img === 'error' ? 'PDF illisible' : 'Réception du PDF…', obj.w / 2, obj.h / 2);
     ctx.textAlign = 'start';
   }
+  ctx.restore();
 }
 
 async function renderPdfPage(obj, bucket) {
@@ -761,7 +813,7 @@ function renderText(obj) {
     el.style.color = obj.color;
   }
   el.style.fontSize = '16px';
-  el.style.transform = `translate(${obj.x}px, ${obj.y}px) scale(${obj.size / 16})`;
+  el.style.transform = `translate(${obj.x}px, ${obj.y}px) rotate(${obj.rot || 0}rad) scale(${obj.size / 16})`;
   el.classList.toggle('hidden', editing && editing.id === obj.id);
 }
 
@@ -861,8 +913,10 @@ function updateSelectionBox() {
   selectionEl.style.height = h + 8 + 'px';
   // Barre d'actions au-dessus de la sélection (ou en dessous si pas la place)
   selbar.hidden = !!drag && drag.kind !== 'none';
-  const bw = selbar.offsetWidth || 160;
-  const top = sy - 52 < 70 ? sy + h + 14 : sy - 52;
+  const bw = selbar.offsetWidth || 160, bh = selbar.offsetHeight || 46;
+  const handleTop = sy - 4 - (matchMedia('(pointer: coarse)').matches ? 40 : 30); // haut de la poignée de rotation
+  const above = handleTop - 8 - bh;
+  const top = above < 70 ? sy + h + 14 : above;
   selbar.style.left = clamp(sx + w / 2 - bw / 2, 8, window.innerWidth - bw - 8) + 'px';
   selbar.style.top = clamp(top, 70, window.innerHeight - 60) + 'px';
 }
@@ -891,8 +945,8 @@ function insideBounds(b, wx, wy, margin = 0) {
 function snapshot(obj) {
   switch (obj.type) {
     case 'stroke': return { points: obj.points.slice(), width: obj.width };
-    case 'pdf': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h };
-    default: return { x: obj.x, y: obj.y, size: obj.size };
+    case 'pdf': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h, rot: obj.rot || 0 };
+    default: return { x: obj.x, y: obj.y, size: obj.size, rot: obj.rot || 0 };
   }
 }
 
@@ -924,6 +978,52 @@ function scaleObject(obj, ax, ay, f) {
     if (obj.type === 'pdf') { obj.w *= f; obj.h *= f; }
     else obj.size = clamp(obj.size * f, 6, 400);
   }
+}
+
+// Rotation d'angle a autour de (cx, cy).
+function rotateObject(obj, cx, cy, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  const rot = (x, y) => [cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c];
+  if (obj.type === 'stroke') {
+    const p = obj.points;
+    for (let i = 0; i < p.length; i += 2) [p[i], p[i + 1]] = rot(p[i], p[i + 1]);
+  } else {
+    [obj.x, obj.y] = rot(obj.x, obj.y);
+    obj.rot = ((obj.rot || 0) + a) % (2 * Math.PI);
+  }
+}
+
+// Position écran de la poignée de rotation (au-dessus du centre du cadre).
+function rotateHandlePos() {
+  const b = selectionBounds();
+  if (!b) return null;
+  const [sx, sy] = toScreen(b.x + b.w / 2, b.y);
+  return [sx, sy - 4 - (matchMedia('(pointer: coarse)').matches ? 30 : 23)];
+}
+
+function pointInPolygon(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 2; i < pts.length; j = i, i += 2) {
+    const xi = pts[i], yi = pts[i + 1], xj = pts[j], yj = pts[j + 1];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Objets capturés par un lasso : traits dont un point est dedans, textes et PDF dont les quatre coins le sont.
+function objectsInPolygon(pts) {
+  const out = [];
+  for (const obj of state.objects.values()) {
+    if (obj.type === 'stroke') {
+      const p = obj.points;
+      for (let i = 0; i < p.length; i += 2) {
+        if (pointInPolygon(p[i], p[i + 1], pts)) { out.push(obj); break; }
+      }
+    } else if (objectRect(obj).corners.every(([x, y]) => pointInPolygon(x, y, pts))) {
+      out.push(obj);
+    }
+  }
+  return out;
 }
 
 function patchOp(objs, before) {
@@ -958,9 +1058,8 @@ function objectsInRect(r) {
       for (let i = 0; i < p.length; i += 2) {
         if (p[i] >= r.x && p[i] <= r.x + r.w && p[i + 1] >= r.y && p[i + 1] <= r.y + r.h) { out.push(obj); break; }
       }
-    } else {
-      const b = bbox(obj);
-      if (b && b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h) out.push(obj);
+    } else if (objectRect(obj).corners.every(([x, y]) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h)) {
+      out.push(obj);
     }
   }
   return out;
@@ -1043,9 +1142,17 @@ canvas.addEventListener('pointerdown', (ev) => {
     return;
   }
 
-  if (tool === 'select') {
+  if (tool === 'select' || tool === 'lasso') {
     const sel = selectedObjects();
     if (sel.length) {
+      const rh = rotateHandlePos();
+      if (rh && dist(ev.clientX, ev.clientY, rh[0], rh[1]) <= (touch ? 28 : 14)) {
+        const b = selectionBounds();
+        const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+        drag = { kind: 'rotate', objs: sel, before: new Map(sel.map((o) => [o.id, snapshot(o)])), cx, cy, a0: Math.atan2(wy - cy, wx - cx) };
+        selbar.hidden = true;
+        return;
+      }
       const c = cornerAt(ev.clientX, ev.clientY, touch ? 28 : 14);
       if (c) {
         const before = new Map(sel.map((o) => [o.id, snapshot(o)]));
@@ -1071,7 +1178,8 @@ canvas.addEventListener('pointerdown', (ev) => {
     } else {
       const keep = ev.shiftKey ? [...state.selected] : [];
       if (!ev.shiftKey) setSelection([]);
-      drag = { kind: 'marquee', x0: wx, y0: wy, keep, sx: ev.clientX, sy: ev.clientY };
+      if (tool === 'lasso') drag = { kind: 'lasso', pts: [wx, wy], keep };
+      else drag = { kind: 'marquee', x0: wx, y0: wy, keep, sx: ev.clientX, sy: ev.clientY };
     }
   }
 });
@@ -1098,9 +1206,11 @@ canvas.addEventListener('pointermove', (ev) => {
     return;
   }
   if (!drag) {
-    if (state.tool === 'select' && ev.pointerType !== 'touch') {
+    if ((state.tool === 'select' || state.tool === 'lasso') && ev.pointerType !== 'touch') {
+      const rh = rotateHandlePos();
       const c = cornerAt(ev.clientX, ev.clientY, 14);
-      canvas.style.cursor = c ? 'nwse-resize' : insideBounds(selectionBounds(), wx, wy) || hitTest(wx, wy) ? 'move' : 'default';
+      canvas.style.cursor = rh && dist(ev.clientX, ev.clientY, rh[0], rh[1]) <= 14 ? 'grab'
+        : c ? 'nwse-resize' : insideBounds(selectionBounds(), wx, wy) || hitTest(wx, wy) ? 'move' : state.tool === 'lasso' ? 'crosshair' : 'default';
     }
     return;
   }
@@ -1133,6 +1243,21 @@ canvas.addEventListener('pointermove', (ev) => {
     case 'erase':
       eraseAt(wx, wy, drag);
       break;
+    case 'lasso': {
+      const p = drag.pts;
+      if (dist(p[p.length - 2], p[p.length - 1], wx, wy) * state.view.scale >= 2) p.push(wx, wy);
+      requestRender();
+      break;
+    }
+    case 'rotate': {
+      let a = Math.atan2(wy - drag.cy, wx - drag.cx) - drag.a0;
+      if (ev.shiftKey) a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12); // pas de 15°
+      for (const o of drag.objs) { restore(o, drag.before.get(o.id)); rotateObject(o, drag.cx, drag.cy, a); }
+      drag.moved = true;
+      if (now - lastLiveSent > 80) { lastLiveSent = now; pushLive(drag.objs); }
+      requestRender();
+      break;
+    }
     case 'marquee': {
       const x = Math.min(drag.sx, ev.clientX), y = Math.min(drag.sy, ev.clientY);
       marqueeEl.hidden = false;
@@ -1201,8 +1326,12 @@ function endPointer(ev) {
       }
       break;
     }
+    case 'lasso':
+      if (d.pts.length >= 6) setSelection([...d.keep, ...objectsInPolygon(d.pts).map((o) => o.id)]);
+      break;
     case 'move':
     case 'resize':
+    case 'rotate':
       if (d.moved) applyOp(patchOp(d.objs, d.before));
       break;
   }
@@ -1233,11 +1362,11 @@ function eraseAt(wx, wy, d) {
 }
 
 canvas.addEventListener('dblclick', (ev) => {
-  if (state.tool !== 'select') return;
+  if (state.tool !== 'select' && state.tool !== 'lasso') return;
   const [wx, wy] = toWorld(ev.clientX, ev.clientY);
   const hit = hitTest(wx, wy);
   if (hit && hit.type === 'text') openEditor(0, 0, hit);
-  else if (!hit) openEditor(wx, wy, null);
+  else if (!hit && state.tool === 'select') openEditor(wx, wy, null);
 });
 
 canvas.addEventListener('wheel', (ev) => {
@@ -1327,20 +1456,23 @@ function setTool(tool) {
   state.tool = tool;
   document.querySelectorAll('.tool[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   canvas.style.cursor = { hand: 'grab', select: 'default', text: 'text', eraser: 'cell' }[tool] || 'crosshair';
+  const isSelectTool = tool === 'select' || tool === 'lasso';
   $('#width').hidden = !(tool === 'pen' || tool === 'marker' || tool === 'eraser');
   $('#font-size').hidden = tool !== 'text';
-  $('#colors').hidden = tool === 'eraser' || tool === 'hand' || tool === 'select';
-  if (tool !== 'select') setSelection([]);
+  $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
+  if (!isSelectTool) setSelection([]);
   const coarse = matchMedia('(pointer: coarse)').matches;
   setHint((coarse ? {
     eraser: 'Glisser sur un trait pour l’effacer',
     text: 'Toucher pour écrire · $…$ = LaTeX',
-    select: 'Toucher un trait ou entourer une zone · glisser pour déplacer · coins pour redimensionner',
+    select: 'Toucher un trait ou encadrer une zone · glisser pour déplacer · coins : taille · poignée du haut : rotation',
+    lasso: 'Entourer à main levée les traits à sélectionner · glisser pour déplacer · coins : taille',
     hand: 'Glisser pour déplacer la vue · deux doigts : zoom',
   } : {
     eraser: 'Glisser sur un trait pour l’effacer',
     text: 'Cliquer pour écrire · $…$ = LaTeX en ligne · $…$ = bloc',
-    select: 'Cliquer ou entourer pour sélectionner · glisser pour déplacer · coins pour redimensionner · Suppr efface · double-clic : texte',
+    select: 'Cliquer ou encadrer pour sélectionner · glisser pour déplacer · coins : taille · poignée du haut : rotation (Maj : pas de 15°) · double-clic : texte',
+    lasso: 'Entourer à main levée les traits à sélectionner · Maj : ajouter à la sélection',
     hand: 'Glisser pour déplacer la vue · Ctrl + molette : zoom',
   })[tool] || '');
 }
@@ -1439,7 +1571,7 @@ window.addEventListener('keydown', (ev) => {
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); return; }
   if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); redo(); return; }
-  if (mod && ev.key.toLowerCase() === 'a') { ev.preventDefault(); setTool('select'); setSelection([...state.objects.keys()]); return; }
+  if (mod && ev.key.toLowerCase() === 'a') { ev.preventDefault(); if (state.tool !== 'lasso') setTool('select'); setSelection([...state.objects.keys()]); return; }
   if (mod && ev.key.toLowerCase() === 'd') { ev.preventDefault(); duplicateSelection(); return; }
   if (mod) return;
   switch (ev.key) {
@@ -1448,6 +1580,7 @@ window.addEventListener('keydown', (ev) => {
       ev.preventDefault();
       break;
     case 'v': case 'V': setTool('select'); break;
+    case 'l': case 'L': setTool('lasso'); break;
     case 'p': case 'P': case 'c': case 'C': setTool('pen'); break;
     case 'h': case 'H': setTool('marker'); break;
     case 'e': case 'E': case 'g': case 'G': setTool('eraser'); break;

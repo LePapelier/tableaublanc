@@ -5,7 +5,7 @@ Petite application web de tableau blanc collaboratif, **sans aucun serveur à h�
 - **Dessin à plusieurs en temps réel** (crayon, surligneur, gomme), avec les traits en cours et les curseurs des autres participants.
 - **Texte et LaTeX** : écrivez du texte, entourez les formules de `$…$` (en ligne) ou `$$…$$` (bloc). Rendu avec KaTeX.
 - **PDF** : importez un PDF (bouton ou glisser-déposer), chaque page est posée sur le tableau et vous pouvez **écrire par-dessus**, déplacer et redimensionner les pages. Le fichier est envoyé directement aux autres navigateurs.
-- Canevas infini (déplacement, zoom), **sélection** d'un ou plusieurs éléments (clic ou lasso rectangulaire) pour les déplacer, les redimensionner par les coins, les dupliquer ou les supprimer, annuler/rétablir.
+- Canevas infini (déplacement, zoom), **sélection** d'un ou plusieurs éléments (clic, cadre rectangulaire ou **lasso à main levée**) pour les déplacer, les redimensionner par les coins, les **faire tourner** par la poignée du haut, les dupliquer ou les supprimer, annuler/rétablir.
 - **Pensé pour le tactile** : dessin au doigt ou au stylet (rejet de la paume), pincement pour zoomer, barre d'outils en bas de l'écran sur téléphone, en portrait comme en paysage.
 - **Sauvegarde locale** : chaque navigateur conserve les salles qu'il a visitées (IndexedDB). En rouvrant le lien, vous retrouvez le tableau, et les autres participants connectés le complètent.
 
@@ -45,7 +45,9 @@ Puis ouvrez <http://localhost:3000>. Pour tester à deux sur la même machine, o
 
 | Touche | Action |
 | --- | --- |
-| `V` | Sélection (glisser pour déplacer, `Suppr` pour effacer, double-clic pour un texte) |
+| `V` | Sélection : clic ou cadre rectangulaire ; glisser pour déplacer, coins pour redimensionner, poignée du haut pour tourner (`Maj` : pas de 15°), `Suppr` pour effacer, double-clic pour un texte |
+| `L` | Lasso : entourer à main levée les traits à sélectionner (`Maj` : ajouter à la sélection) |
+| `Ctrl+A` / `Ctrl+D` | Tout sélectionner / dupliquer la sélection |
 | `P` ou `C` | Crayon |
 | `H` | Surligneur |
 | `E` ou `G` | Gomme (efface les traits touchés) |
@@ -54,7 +56,7 @@ Puis ouvrez <http://localhost:3000>. Pour tester à deux sur la même machine, o
 | `Ctrl` + molette | Zoom (la molette seule fait défiler) |
 | `Ctrl+Z` / `Ctrl+Y` | Annuler / rétablir |
 
-Sur téléphone ou tablette : un doigt dessine (ou sélectionne, avec l'outil flèche), deux doigts déplacent la vue et zooment. Avec l'outil flèche, entourez une zone pour sélectionner les traits qu'elle contient, puis glissez l'ensemble ou tirez un coin pour le redimensionner ; une petite barre « Dupliquer / Supprimer » apparaît au-dessus de la sélection.
+Sur téléphone ou tablette : un doigt dessine (ou sélectionne, avec l'outil flèche), deux doigts déplacent la vue et zooment. Avec l'outil flèche, encadrez une zone (ou, avec le lasso, entourez-la à main levée) pour sélectionner les traits qu'elle contient, puis glissez l'ensemble, tirez un coin pour le redimensionner ou la poignée du haut pour le faire tourner ; une petite barre « Dupliquer / Supprimer » apparaît au-dessus de la sélection.
 
 ## Structure
 

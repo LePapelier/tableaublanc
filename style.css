@@ -102,6 +102,26 @@ html, body {
 #selection .ne { right: -7px; top: -7px; }
 #selection .sw { left: -7px; bottom: -7px; }
 #selection .se { right: -7px; bottom: -7px; }
+#selection .rotate {
+  position: absolute;
+  left: 50%;
+  top: -30px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  background: white;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+}
+#selection .rotate::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 1.5px;
+  height: 14px;
+  background: var(--accent);
+}
 
 #marquee {
   position: absolute;
@@ -387,6 +407,8 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
   #selection .ne { right: -10px; top: -10px; }
   #selection .sw { left: -10px; bottom: -10px; }
   #selection .se { right: -10px; bottom: -10px; }
+  #selection .rotate { width: 20px; height: 20px; margin-left: -10px; top: -40px; }
+  #selection .rotate::after { height: 18px; }
 
   #hint { bottom: calc(var(--toolbar-h, 64px) + 22px + env(safe-area-inset-bottom)); max-width: calc(100vw - 24px); white-space: normal; text-align: center; font-size: 12px; }
   #status { top: calc(58px + env(safe-area-inset-top)); font-size: 12px; max-width: calc(100vw - 24px); text-align: center; }
