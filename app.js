@@ -47,7 +47,7 @@ const state = {
   view: { tx: 0, ty: 0, scale: 1 },
   tool: 'pen',
   color: PALETTE[0],
-  width: 3,
+  width: 4,
   fontSize: 24,
   selected: new Set(), // ids sélectionnés
   undo: [],
@@ -1791,8 +1791,8 @@ function setTool(tool) {
   document.querySelectorAll('.tool[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   canvas.style.cursor = { hand: 'grab', select: 'default', text: 'text', eraser: 'cell' }[tool] || 'crosshair';
   const isSelectTool = tool === 'select' || tool === 'lasso';
-  $('#width').hidden = !(tool === 'pen' || tool === 'marker' || tool === 'eraser');
-  $('#font-size').hidden = tool !== 'text';
+  $('#sizes').hidden = !(tool === 'pen' || tool === 'marker' || tool === 'eraser');
+  $('#font-sizes').hidden = tool !== 'text';
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
   if (!isSelectTool) setSelection([]);
   const coarse = matchMedia('(pointer: coarse)').matches;
@@ -1842,12 +1842,46 @@ function setColor(c) {
 }
 setColor(state.color);
 
-$('#width').addEventListener('input', (ev) => { state.width = Number(ev.target.value); });
-$('#font-size').addEventListener('input', (ev) => {
-  state.fontSize = Number(ev.target.value);
+// Tailles prédéfinies : plus faciles à viser qu'un curseur, surtout au doigt.
+const STROKE_SIZES = [2, 4, 7, 12];
+const FONT_SIZES = [18, 24, 36, 56];
+function buildSizes(container, values, render, onPick) {
+  container.replaceChildren();
+  for (const v of values) {
+    const b = document.createElement('button');
+    b.className = 'size';
+    b.dataset.value = v;
+    b.title = v + ' px';
+    b.appendChild(render(v));
+    b.addEventListener('click', () => onPick(v));
+    container.appendChild(b);
+  }
+}
+function markActive(container, value) {
+  container.querySelectorAll('.size').forEach((b) => b.classList.toggle('active', Number(b.dataset.value) === value));
+}
+buildSizes($('#sizes'), STROKE_SIZES, (v) => {
+  const d = document.createElement('span');
+  d.className = 'dot';
+  const px = 3 + v * 1.25; // 5.5, 8, 11.75, 18 px : écarts bien visibles
+  d.style.width = d.style.height = px + 'px';
+  return d;
+}, (v) => { state.width = v; markActive($('#sizes'), v); });
+buildSizes($('#font-sizes'), FONT_SIZES, (v) => {
+  const g = document.createElement('span');
+  g.className = 'glyph';
+  g.textContent = 'A';
+  g.style.fontSize = (9 + v / 4) + 'px';
+  return g;
+}, (v) => {
+  state.fontSize = v;
+  markActive($('#font-sizes'), v);
   const objs = selectedObjects().filter((o) => o.type === 'text');
-  if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { size: o.size }, after: { size: state.fontSize } })) });
+  if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { size: o.size }, after: { size: v } })) });
 });
+state.width = 4;
+markActive($('#sizes'), state.width);
+markActive($('#font-sizes'), state.fontSize);
 
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);

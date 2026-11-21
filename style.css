@@ -336,13 +336,24 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 .swatch.custom { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); position: relative; overflow: hidden; }
 .swatch.custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
-#options input[type=range] {
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 20px;
-  height: 90px;
-  accent-color: var(--accent);
+#sizes, #font-sizes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
 }
+.size {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--text);
+}
+.size:hover { background: #eef1f5; }
+.size.active { background: var(--accent-soft); color: var(--accent); }
+.size .dot { border-radius: 50%; background: currentColor; }
+.size .glyph { font-weight: 600; line-height: 1; }
 
 #hint {
   position: fixed;
@@ -415,25 +426,19 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
   .tool svg { width: 24px; height: 24px; }
 
   #options {
-    flex-direction: row;
+    flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 6px;
     margin: 0 0 6px;
     padding: 0 4px 8px;
     border-top: none;
     border-bottom: 1px solid var(--border);
     max-width: 100%;
-    overflow-x: auto;
   }
   #colors { display: flex; gap: 7px; }
   .swatch { width: 24px; height: 24px; }
-  #options input[type=range] {
-    writing-mode: horizontal-tb;
-    direction: ltr;
-    width: 72px;
-    height: 24px;
-    flex: none;
-  }
+  #sizes, #font-sizes { display: flex; gap: 10px; }
+  .size { width: 40px; height: 32px; }
 
   #selection .handle { width: 18px; height: 18px; border-radius: 50%; }
   #selection .nw { left: -10px; top: -10px; }
