@@ -2987,7 +2987,7 @@ function setColor(c) {
 setColor(state.color);
 
 // Tailles prédéfinies : plus faciles à viser qu'un curseur, surtout au doigt.
-const STROKE_SIZES = [2, 4, 7, 12];
+const STROKE_SIZES = [2, 4, 8];
 const FONT_SIZES = [18, 24, 36, 56];
 function buildSizes(container, values, render, onPick) {
   container.replaceChildren();
@@ -3007,7 +3007,7 @@ function markActive(container, value) {
 buildSizes($('#sizes'), STROKE_SIZES, (v) => {
   const d = document.createElement('span');
   d.className = 'dot';
-  const px = 3 + v * 1.25; // 5.5, 8, 11.75, 18 px : écarts bien visibles
+  const px = 3 + v * 1.4; // 5.8, 8.6, 14.2 px : écarts bien visibles
   d.style.width = d.style.height = px + 'px';
   return d;
 }, (v) => { state.width = v; markActive($('#sizes'), v); });
