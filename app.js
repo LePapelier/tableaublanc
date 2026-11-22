@@ -1067,6 +1067,7 @@ function drawPdf(obj) {
   ctx.save();
   ctx.translate(obj.x, obj.y);
   if (obj.rot) ctx.rotate(obj.rot);
+  if (obj.flip) { ctx.translate(obj.w, 0); ctx.scale(-1, 1); }
   ctx.fillStyle = 'white';
   ctx.shadowColor = 'rgba(0,0,0,.15)';
   ctx.shadowBlur = 12 / state.view.scale;
@@ -1137,6 +1138,7 @@ function drawImageObj(obj) {
   ctx.save();
   ctx.translate(obj.x, obj.y);
   if (obj.rot) ctx.rotate(obj.rot);
+  if (obj.flip) { ctx.translate(obj.w, 0); ctx.scale(-1, 1); }
   if (img && typeof img !== 'string') {
     ctx.drawImage(img, 0, 0, obj.w, obj.h);
   } else {
@@ -1246,7 +1248,8 @@ function renderText(obj) {
     el.style.color = obj.color;
   }
   el.style.fontSize = '16px';
-  el.style.transform = `translate(${obj.x}px, ${obj.y}px) rotate(${obj.rot || 0}rad) scale(${obj.size / 16})`;
+  const flipT = obj.flip ? ` translate(${el.offsetWidth * (obj.size / 16)}px, 0) scale(-1, 1)` : '';
+  el.style.transform = `translate(${obj.x}px, ${obj.y}px) rotate(${obj.rot || 0}rad)${flipT} scale(${obj.size / 16})`;
   el.classList.toggle('hidden', editing && editing.id === obj.id);
 }
 
@@ -1383,8 +1386,8 @@ function insideBounds(b, wx, wy, margin = 0) {
 function snapshot(obj) {
   switch (obj.type) {
     case 'stroke': return { points: obj.points.slice(), width: obj.width };
-    case 'pdf': case 'image': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h, rot: obj.rot || 0 };
-    default: return { x: obj.x, y: obj.y, size: obj.size, rot: obj.rot || 0 };
+    case 'pdf': case 'image': return { x: obj.x, y: obj.y, w: obj.w, h: obj.h, rot: obj.rot || 0, flip: !!obj.flip };
+    default: return { x: obj.x, y: obj.y, size: obj.size, rot: obj.rot || 0, flip: !!obj.flip };
   }
 }
 
@@ -1557,10 +1560,34 @@ function rotateSelection(angle) {
   applyOp(patchOp(sel, before));
 }
 
+// Réflexion horizontale de la sélection autour de l'axe vertical passant par le centre du cadre.
+function mirrorObject(obj, cx) {
+  if (obj.type === 'stroke') {
+    const p = obj.points;
+    for (let i = 0; i < p.length; i += 2) p[i] = 2 * cx - p[i];
+    return;
+  }
+  const rot = obj.rot || 0;
+  const w = obj.type === 'text' ? textSize(obj)[0] : obj.w;
+  // Le coin haut-gauche du cadre réfléchi est l'image de l'ancien coin haut-droit ; la rotation s'inverse.
+  const nx = 2 * cx - (obj.x + w * Math.cos(rot));
+  const ny = obj.y + w * Math.sin(rot);
+  obj.x = nx; obj.y = ny; obj.rot = -rot; obj.flip = !obj.flip;
+}
+function mirrorSelection() {
+  const sel = selectedObjects();
+  const b = selectionBounds();
+  if (!sel.length || !b || !iCanWrite()) return;
+  const before = new Map(sel.map((o) => [o.id, snapshot(o)]));
+  const cx = b.x + b.w / 2;
+  for (const o of sel) mirrorObject(o, cx);
+  applyOp(patchOp(sel, before));
+}
+
 function straightenSelection() {
-  const sel = selectedObjects().filter((o) => o.type !== 'stroke' && (o.rot || 0) !== 0);
+  const sel = selectedObjects().filter((o) => o.type !== 'stroke' && ((o.rot || 0) !== 0 || o.flip));
   if (!sel.length || !iCanWrite()) return;
-  applyOp({ t: 'patch', items: sel.map((o) => ({ id: o.id, before: { rot: o.rot }, after: { rot: 0 } })) });
+  applyOp({ t: 'patch', items: sel.map((o) => ({ id: o.id, before: { rot: o.rot || 0, flip: !!o.flip }, after: { rot: 0, flip: false } })) });
 }
 
 const CTX_ITEMS = [
@@ -1569,9 +1596,9 @@ const CTX_ITEMS = [
   { label: 'Mettre au premier plan', icon: 'front', run: () => reorderSelection('front') },
   { label: 'Mettre à l’arrière-plan', icon: 'back', run: () => reorderSelection('back') },
   { sep: true },
-  { label: 'Pivoter de 90° à droite', icon: 'rotateCw', run: () => rotateSelection(Math.PI / 2) },
-  { label: 'Pivoter de 90° à gauche', icon: 'rotateCcw', run: () => rotateSelection(-Math.PI / 2) },
-  { label: 'Remettre droit', icon: 'reset', run: straightenSelection, when: () => selectedObjects().some((o) => o.type !== 'stroke' && (o.rot || 0) !== 0) },
+  { label: 'Pivoter de 90°', icon: 'rotateCw', run: () => rotateSelection(Math.PI / 2) },
+  { label: 'Miroir', icon: 'flip', run: mirrorSelection },
+  { label: 'Remettre droit', icon: 'reset', run: straightenSelection, when: () => selectedObjects().some((o) => o.type !== 'stroke' && ((o.rot || 0) !== 0 || o.flip)) },
   { sep: true },
   { label: 'Dupliquer', icon: 'copy', run: duplicateSelection },
   { label: 'Supprimer', icon: 'trash', danger: true, run: deleteSelection },
@@ -1648,6 +1675,7 @@ const CTX_ICONS = {
   front: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" rx=\"2\" /><path d=\"M4 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2\" /><path d=\"M14 20a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2\" /></svg>",
   back: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"14\" y=\"14\" width=\"8\" height=\"8\" rx=\"2\" /><rect x=\"2\" y=\"2\" width=\"8\" height=\"8\" rx=\"2\" /><path d=\"M7 14v1a2 2 0 0 0 2 2h1\" /><path d=\"M14 7h1a2 2 0 0 1 2 2v1\" /></svg>",
   rotateCw: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\" /><path d=\"M21 3v5h-5\" /></svg>",
+  flip: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M10 12H8\" /><path d=\"M16 12h-2\" /><path d=\"M22 12h-2\" /><path d=\"M4 12H2\" /><path d=\"M7.298 20.288A1 1 0 0 0 8 22h8a1 1 0 0 0 .703-1.712l-3.991-3.99a1 1 0 0 0-1.424-.001z\" /><path d=\"M7.298 3.712A1 1 0 0 1 8 2h8a1 1 0 0 1 .703 1.712l-3.991 3.99a1 1 0 0 1-1.424.001z\" /></svg>",
   rotateCcw: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /></svg>",
   reset: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /><path d=\"M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16\" /><path d=\"M16 16h5v5\" /></svg>",
   copy: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\" /><path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\" /></svg>",
@@ -2492,6 +2520,7 @@ async function rasterizeText(obj, scale = 3) {
   c.width = Math.max(1, Math.round(pxW * k * scale));
   c.height = Math.max(1, Math.round(pxH * k * scale));
   const g = c.getContext('2d');
+  if (obj.flip) { g.translate(c.width, 0); g.scale(-1, 1); }
   g.drawImage(img, 0, 0);
   let blob = null;
   try {
@@ -2537,21 +2566,24 @@ async function exportPdf() {
   const placed = new Set();
   const imageEmbeds = new Map();
   const imageEmbed = async (o) => {
-    if (!imageEmbeds.has(o.fileId)) {
-      imageEmbeds.set(o.fileId, (async () => {
+    const key = o.fileId + (o.flip ? '|flip' : '');
+    if (!imageEmbeds.has(key)) {
+      imageEmbeds.set(key, (async () => {
         const buf = files.get(o.fileId);
         if (!buf) return null;
-        if (o.mime === 'image/png') return out.embedPng(buf);
-        if (o.mime === 'image/jpeg') return out.embedJpg(buf);
+        if (!o.flip && o.mime === 'image/png') return out.embedPng(buf);
+        if (!o.flip && o.mime === 'image/jpeg') return out.embedJpg(buf);
         const bmp = await createImageBitmap(new Blob([buf], { type: o.mime }));
         const c = document.createElement('canvas');
         c.width = bmp.width; c.height = bmp.height;
-        c.getContext('2d').drawImage(bmp, 0, 0);
+        const g = c.getContext('2d');
+        if (o.flip) { g.translate(c.width, 0); g.scale(-1, 1); }
+        g.drawImage(bmp, 0, 0);
         const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
         return out.embedPng(await blob.arrayBuffer());
       })());
     }
-    return imageEmbeds.get(o.fileId);
+    return imageEmbeds.get(key);
   };
   const srcDocs = new Map();
   const textImages = new Map();
