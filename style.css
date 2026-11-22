@@ -319,10 +319,10 @@ button:disabled { opacity: .4; cursor: default; background: transparent; }
 #users-list li.foot { border-top: 1px solid var(--border); background: #f7f8fa; flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 14px 12px; }
 #users-list li.foot .label { display: none; }
 #users-list li.foot .muted { font-size: 13px; }
-#users-list button.lock { height: 38px; width: 100%; justify-content: flex-start; gap: 10px; background: white; border: 1px solid var(--border); font-size: 13px; }
-#users-list button.lock svg { width: 17px; height: 17px; }
-#users-list button.lock.locked { color: #b45309; border-color: #fcd34d; background: #fffbeb; }
-#users-list button.lock:hover { border-color: var(--accent); }
+#users-list button.lock { height: 38px; width: 100%; justify-content: flex-start; gap: 10px; background: white; border: 1px solid var(--border); font-size: 13px; color: var(--text); }
+#users-list button.lock svg { width: 17px; height: 17px; color: var(--muted); }
+#users-list button.lock.locked svg { color: var(--text); }
+#users-list button.lock:hover { background: #f7f8fa; }
 #users-list button.text.wide { height: 34px; justify-content: center; background: white; border: 1px solid var(--border); }
 .tool.disabled { opacity: .35; pointer-events: none; }
 body.readonly #board { cursor: not-allowed; }
