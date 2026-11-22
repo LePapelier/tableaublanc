@@ -1703,7 +1703,9 @@ const CTX_ITEMS = [
   { label: 'Supprimer', icon: 'trash', danger: true, run: deleteSelection },
 ];
 
-function openContextMenu(x, y) {
+// mode : 'pointer' (clic droit : au point du clic, comme les logiciels de bureau) ou 'selection' (tactile, bouton ⋯ :
+// à côté de la sélection, car le doigt cache le point touché).
+function openContextMenu(x, y, mode = 'pointer') {
   if (!selectedObjects().length) return;
   ctxmenu.replaceChildren();
   for (const it of CTX_ITEMS) {
@@ -1721,8 +1723,8 @@ function openContextMenu(x, y) {
   const w = ctxmenu.offsetWidth, h = ctxmenu.offsetHeight;
   const W = window.innerWidth, H = window.innerHeight, gap = 12;
   // À côté de la sélection, sans la recouvrir : droite, gauche, dessous, dessus ; sinon près du pointeur.
-  const b = selectionBounds();
-  let left = x, top = y;
+  const b = mode === 'selection' ? selectionBounds() : null;
+  let left = x + 2, top = y + 2;
   if (b) {
     const [sx, sy] = toScreen(b.x, b.y);
     const sw = b.w * state.view.scale, sh = b.h * state.view.scale;
@@ -1761,11 +1763,11 @@ canvas.addEventListener('contextmenu', (ev) => {
     if (state.tool !== 'select' && state.tool !== 'lasso') setTool('select');
     setSelection([hit.id]);
   }
-  openContextMenu(ev.clientX, ev.clientY);
+  openContextMenu(ev.clientX, ev.clientY, matchMedia('(pointer: coarse)').matches ? 'selection' : 'pointer');
 });
 $('#sel-more').addEventListener('click', (ev) => {
   const r = ev.currentTarget.getBoundingClientRect();
-  openContextMenu(r.left, r.bottom + 6);
+  openContextMenu(r.left, r.bottom + 6, 'selection');
 });
 
 const CTX_ICONS = {
@@ -1874,7 +1876,7 @@ canvas.addEventListener('pointerdown', (ev) => {
         if (drag && drag.before) for (const o of drag.objs) restore(o, drag.before.get(o.id));
         drag = null;
         if (target) setSelection([target.id]);
-        openContextMenu(ev.clientX, ev.clientY);
+        openContextMenu(ev.clientX, ev.clientY, 'selection');
         requestRender();
       }, 550) };
     }
