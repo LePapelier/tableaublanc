@@ -943,7 +943,7 @@ function render() {
   cursorsEl.style.transform = overlay.style.transform;
   for (const c of cursorsEl.children) c.style.transform = `translate(${c.dataset.x}px, ${c.dataset.y}px) scale(${1 / scale})`;
   updateSelectionBox();
-  $('#btn-zoom-fit .zoom-value').textContent = Math.round(scale * 100) + ' %';
+  $('#btn-zoom-reset .zoom-value').textContent = Math.round(scale * 100) + ' %';
 }
 
 function drawLasso(pts) {
@@ -2728,6 +2728,7 @@ $('#btn-redo').addEventListener('click', redo);
 $('#btn-zoom-in').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1.25));
 $('#btn-zoom-out').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 0.8));
 $('#btn-zoom-fit').addEventListener('click', fitView);
+$('#btn-zoom-reset').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1 / state.view.scale));
 $('#btn-clear').addEventListener('click', () => {
   if (!state.objects.size) return;
   if (!iCanWrite()) { warn('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
