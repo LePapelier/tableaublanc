@@ -87,10 +87,14 @@ const state = {
   selected: new Set(), // ids sélectionnés
   preamble: '', // préambule LaTeX partagé (macros)
   access: null, // droits : { leader, mode: 'open' | 'restricted', writers: { uid: true } }
+  sheets: [{ id: 's1', name: 'Feuille 1' }], // feuilles de la salle (partagées)
+  sheet: 's1', // feuille affichée ici
   undo: [],
   redo: [],
 };
 const files = new Map(); // fileId -> ArrayBuffer (PDF, images)
+const DEFAULT_SHEET = 's1';
+const sheetOf = (o) => o.sheet || DEFAULT_SHEET;
 const isRect = (obj) => obj.type === 'pdf' || obj.type === 'image';
 
 const canvas = $('#board');
@@ -146,7 +150,7 @@ function scheduleSave() {
     saveTimer = null;
     const cutoff = Date.now() - 7 * 86400e3;
     for (const [id, t] of state.tombstones) if (t < cutoff) state.tombstones.delete(id);
-    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access });
+    idbPut('rooms', ROOM, { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access, sheets: state.sheets, sheet: state.sheet });
   }, 800);
 }
 
@@ -156,6 +160,8 @@ async function loadLocal() {
   for (const [id, t] of saved.tombstones || []) state.tombstones.set(id, t);
   if (saved.preamble) applyPreamble(saved.preamble, { broadcast: false, save: false });
   if (saved.access && saved.access.leader && !state.access) setAccess(saved.access, { broadcast: false, save: false });
+  if (Array.isArray(saved.sheets) && saved.sheets.length) setSheets(saved.sheets, { broadcast: false, save: false });
+  if (saved.sheet && state.sheets.some((f) => f.id === saved.sheet)) switchSheet(saved.sheet, { fit: false });
   mergeObjects(saved.objects || [], null);
 }
 
@@ -167,6 +173,7 @@ let actions = null;
 let profile = null;
 let preambleState = null; // état partagé du préambule (synchronisé aux retardataires)
 let accessState = null; // état partagé des droits
+let sheetsState = null; // état partagé des feuilles
 const peerUsers = new Map(); // peerId -> userId
 
 function setStatus(text, kind = '') {
@@ -222,6 +229,10 @@ function connect() {
   profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af', uid: '' });
   profile.set({ name: me.name, color: me.color, uid: me.uid }).catch(() => {});
   accessState = room.makeState('access', null);
+  sheetsState = room.makeState('sheets', null);
+  sheetsState.onChange((value) => {
+    if (Array.isArray(value) && value.length && JSON.stringify(value) !== JSON.stringify(state.sheets)) setSheets(value, { broadcast: false });
+  });
   accessState.onChange((value) => {
     if (value && value.leader && JSON.stringify(value) !== JSON.stringify(state.access)) setAccess(value, { broadcast: false });
   });
@@ -288,6 +299,7 @@ function connect() {
     // Un préambule local jamais publié (salle rouverte seul) est partagé au premier arrivant.
     if (state.preamble && preambleState && !preambleState.get()) preambleState.set(state.preamble).catch(() => {});
     if (state.access && accessState && !accessState.get()) accessState.set(state.access).catch(() => {});
+    if (sheetsState && !sheetsState.get() && (state.sheets.length > 1 || state.sheets[0].name !== 'Feuille 1')) sheetsState.set(state.sheets).catch(() => {});
   });
   room.onPeerLeave(({ peerId }) => {
     peerUsers.delete(peerId);
@@ -559,9 +571,12 @@ function relayHandle(msg, env) {
     case 'access':
       if (msg.p && msg.p.leader) setAccess(msg.p, { broadcast: false });
       break;
+    case 'sheets':
+      if (Array.isArray(msg.p) && msg.p.length) setSheets(msg.p, { broadcast: false });
+      break;
     case 'cursor': updateRemoteCursor(key, msg.p); break;
     case 'sync-req':
-      relaySend({ k: 'sync', p: { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access } }, from);
+      relaySend({ k: 'sync', p: { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access, sheets: state.sheets } }, from);
       break;
     case 'sync': {
       const p = msg.p || {};
@@ -571,6 +586,7 @@ function relayHandle(msg, env) {
       mergeObjects(p.objects || [], key);
       if (typeof p.preamble === 'string' && p.preamble && !state.preamble) applyPreamble(p.preamble, { broadcast: false });
       if (p.access && p.access.leader && !state.access) setAccess(p.access, { broadcast: false });
+      if (Array.isArray(p.sheets) && p.sheets.length > state.sheets.length) setSheets(p.sheets, { broadcast: false });
       break;
     }
     case 'file-req':
@@ -740,7 +756,7 @@ function zoomAt(sx, sy, factor) {
 
 function contentBounds() {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const obj of state.objects.values()) {
+  for (const obj of sortedObjects()) {
     const b = bbox(obj);
     if (!b) continue;
     minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
@@ -850,8 +866,8 @@ function segDist(px, py, ax, ay, bx, by) {
 const Z = { pdf: 0, image: 0.5, stroke: 1, text: 2 };
 // Profondeur d'un objet : z explicite (menu contextuel), sinon son type puis sa date de création.
 function zOf(o) { return o.z ?? (Z[o.type] * 1e13 + (o.ts || 0)); }
-function sortedObjects() {
-  return [...state.objects.values()].sort((a, b) => zOf(a) - zOf(b));
+function sortedObjects(sheet = state.sheet) {
+  return [...state.objects.values()].filter((o) => sheetOf(o) === sheet).sort((a, b) => zOf(a) - zOf(b));
 }
 
 function hitTest(wx, wy, tol = 6 / state.view.scale) {
@@ -911,7 +927,7 @@ function render() {
     else if (obj.type === 'pdf') drawPdf(obj);
     else if (obj.type === 'image') drawImageObj(obj);
   }
-  for (const draft of state.drafts.values()) drawStroke(draft);
+  for (const draft of state.drafts.values()) if (sheetOf(draft) === state.sheet) drawStroke(draft);
   if (currentStroke) drawStroke(currentStroke);
   if (drag && drag.kind === 'lasso' && drag.pts.length > 4) drawLasso(drag.pts);
 
@@ -1162,7 +1178,7 @@ async function insertImageFile(file, wx, wy) {
     if (!files.has(fileId)) storeFile(fileId, buf);
     const w = Math.min(800, bmp.width);
     const h = (w * bmp.height) / bmp.width;
-    applyOp({ t: 'add', objs: [{ id: uid(), type: 'image', fileId, mime: file.type || 'image/png', x: wx, y: wy, w, h, ts: Date.now() }] });
+    applyOp({ t: 'add', objs: [{ id: uid(), type: 'image', sheet: state.sheet, fileId, mime: file.type || 'image/png', x: wx, y: wy, w, h, ts: Date.now() }] });
     bmp.close?.();
     flash('Image insérée');
   } catch (err) {
@@ -1196,7 +1212,7 @@ async function insertPdfFile(file, wx, wy) {
       const page = await doc.getPage(i);
       const vp = page.getViewport({ scale: 1 });
       const h = (pageW * vp.height) / vp.width;
-      objs.push({ id: uid(), type: 'pdf', fileId, page: i, x: wx, y, w: pageW, h, ts: Date.now() });
+      objs.push({ id: uid(), type: 'pdf', sheet: state.sheet, fileId, page: i, x: wx, y, w: pageW, h, ts: Date.now() });
       y += h + 24;
     }
     applyOp({ t: 'add', objs });
@@ -1279,7 +1295,7 @@ function closeEditor(commit) {
   if (commit) {
     if (e.isNew) {
       if (text) {
-        applyOp({ t: 'add', objs: [{ id: e.id, type: 'text', x: e.x, y: e.y, text, size: state.fontSize, color: state.color, ts: Date.now() }] });
+        applyOp({ t: 'add', objs: [{ id: e.id, type: 'text', sheet: state.sheet, x: e.x, y: e.y, text, size: state.fontSize, color: state.color, ts: Date.now() }] });
       }
     } else {
       const obj = state.objects.get(e.id);
@@ -1454,7 +1470,7 @@ function pointInPolygon(x, y, pts) {
 // Objets capturés par un lasso : traits dont un point est dedans, textes et PDF dont les quatre coins le sont.
 function objectsInPolygon(pts) {
   const out = [];
-  for (const obj of state.objects.values()) {
+  for (const obj of sortedObjects()) {
     if (obj.type === 'stroke') {
       const p = obj.points;
       for (let i = 0; i < p.length; i += 2) {
@@ -1493,7 +1509,7 @@ function duplicateSelection() {
 // Objets touchés par un rectangle : traits dont un point est dedans, textes et PDF entièrement contenus.
 function objectsInRect(r) {
   const out = [];
-  for (const obj of state.objects.values()) {
+  for (const obj of sortedObjects()) {
     if (obj.type === 'stroke') {
       const p = obj.points;
       for (let i = 0; i < p.length; i += 2) {
@@ -1743,7 +1759,7 @@ canvas.addEventListener('pointerdown', (ev) => {
   }
   if (tool === 'pen' || tool === 'marker') {
     currentStroke = {
-      id: uid(), type: 'stroke', points: [wx, wy], color: state.color,
+      id: uid(), type: 'stroke', sheet: state.sheet, points: [wx, wy], color: state.color,
       width: tool === 'marker' ? state.width * 4 : state.width,
       opacity: tool === 'marker' ? 0.35 : 1, ts: Date.now(),
     };
@@ -1830,7 +1846,7 @@ canvas.addEventListener('pointermove', (ev) => {
   const now = performance.now();
   if (now - lastCursorSent > 50) {
     lastCursorSent = now;
-    broadcast('cursor', { x: wx, y: wy });
+    broadcast('cursor', { x: wx, y: wy, sheet: state.sheet });
   }
 
   if (pinch && pointers.size === 2) {
@@ -1991,7 +2007,7 @@ function cancelCurrentStroke() {
 function eraseAt(wx, wy, d) {
   const radius = (d.touch ? 14 : 8) / state.view.scale;
   const hit = [];
-  for (const obj of state.objects.values()) {
+  for (const obj of sortedObjects()) {
     if (obj.type === 'stroke' && strokeHit(obj, wx, wy, radius)) hit.push(obj);
   }
   if (hit.length) {
@@ -2041,6 +2057,135 @@ window.addEventListener('paste', (ev) => {
   ev.preventDefault();
   const [wx, wy] = toWorld(canvas.clientWidth / 2 - 200 * state.view.scale, canvas.clientHeight / 2 - 150 * state.view.scale);
   insertFiles(imgs, wx, wy);
+});
+
+// ---------------------------------------------------------------------------
+// Feuilles
+// ---------------------------------------------------------------------------
+const sheetsMenu = $('#sheets-menu');
+
+function setSheets(list, { broadcast = true, save = true } = {}) {
+  const clean = list.filter((f) => f && typeof f.id === 'string').map((f) => ({ id: f.id, name: String(f.name || '').slice(0, 40) || 'Feuille' }));
+  if (!clean.length) return;
+  state.sheets = clean;
+  if (!clean.some((f) => f.id === state.sheet)) switchSheet(clean[0].id);
+  if (save) scheduleSave();
+  if (broadcast) {
+    if (sheetsState) sheetsState.set(clean).catch(() => {});
+    if (relay.peers.size) relaySend({ k: 'sheets', p: clean });
+  }
+  renderSheets();
+}
+
+function switchSheet(id, { fit = true } = {}) {
+  if (!state.sheets.some((f) => f.id === id)) return;
+  if (editing) closeEditor(true);
+  cancelCurrentStroke();
+  state.sheet = id;
+  setSelection([]);
+  closeContextMenu();
+  for (const c of cursorsEl.children) c.hidden = c.dataset.sheet !== id;
+  if (fit) fitView();
+  scheduleSave();
+  renderSheets();
+  requestRender();
+}
+
+function addSheet() {
+  if (!iCanWrite()) { warn('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
+  const id = 's' + uid();
+  const n = state.sheets.length + 1;
+  setSheets([...state.sheets, { id, name: `Feuille ${n}` }]);
+  switchSheet(id);
+}
+
+function renameSheet(id, name) {
+  if (!iCanWrite()) return;
+  setSheets(state.sheets.map((f) => (f.id === id ? { ...f, name } : f)));
+}
+
+function deleteSheet(id) {
+  if (!iCanWrite() || state.sheets.length < 2) return;
+  const objs = sortedObjects(id);
+  const name = state.sheets.find((f) => f.id === id)?.name || 'cette feuille';
+  if (!confirm(objs.length ? `Supprimer « ${name} » et ses ${objs.length} élément(s) pour tout le monde ?` : `Supprimer « ${name} » ?`)) return;
+  if (objs.length) applyOp({ t: 'remove', objs }, false);
+  setSheets(state.sheets.filter((f) => f.id !== id));
+}
+
+function renderSheets() {
+  const idx = state.sheets.findIndex((f) => f.id === state.sheet);
+  const cur = state.sheets[idx] || state.sheets[0];
+  $('#sheet-name').textContent = cur ? cur.name : 'Feuille';
+  $('#sheet-count').textContent = state.sheets.length > 1 ? `${idx + 1}/${state.sheets.length}` : '';
+  if (sheetsMenu.hidden) return;
+  sheetsMenu.replaceChildren();
+  const can = iCanWrite();
+  for (const f of state.sheets) {
+    const row = document.createElement('div');
+    row.className = 'sheet' + (f.id === state.sheet ? ' current' : '');
+    const pick = document.createElement('button');
+    pick.className = 'pick';
+    pick.innerHTML = (f.id === state.sheet ? SHEET_ICONS.check : '<span class="spacer"></span>') + '<span class="label"></span><span class="n"></span>';
+    pick.querySelector('.label').textContent = f.name;
+    pick.querySelector('.n').textContent = sortedObjects(f.id).length || '';
+    pick.title = 'Afficher cette feuille';
+    pick.addEventListener('click', (ev) => { ev.stopPropagation(); sheetsMenu.hidden = true; switchSheet(f.id); });
+    row.appendChild(pick);
+    if (can) {
+      const ren = document.createElement('button');
+      ren.className = 'mini';
+      ren.title = 'Renommer';
+      ren.innerHTML = SHEET_ICONS.pencil;
+      ren.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // Le champ remplace le bouton entier : un champ dans un bouton, et l'espace activerait le bouton.
+        const input = document.createElement('input');
+        input.type = 'text'; input.maxLength = 40; input.value = f.name; input.className = 'name-edit';
+        pick.replaceWith(input);
+        input.focus(); input.select();
+        let done = false;
+        const finish = (commit) => { if (done) return; done = true; if (commit && input.value.trim()) renameSheet(f.id, input.value.trim()); else renderSheets(); };
+        input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); });
+        input.addEventListener('blur', () => finish(true));
+        input.addEventListener('click', (e) => e.stopPropagation());
+        input.addEventListener('pointerdown', (e) => e.stopPropagation());
+      });
+      row.appendChild(ren);
+      if (state.sheets.length > 1) {
+        const del = document.createElement('button');
+        del.className = 'mini danger';
+        del.title = 'Supprimer la feuille';
+        del.innerHTML = SHEET_ICONS.trash;
+        del.addEventListener('click', (ev) => { ev.stopPropagation(); deleteSheet(f.id); });
+        row.appendChild(del);
+      }
+    }
+    sheetsMenu.appendChild(row);
+  }
+  if (can) {
+    const add = document.createElement('button');
+    add.className = 'add';
+    add.innerHTML = SHEET_ICONS.plus + '<span>Nouvelle feuille</span>';
+    add.addEventListener('click', (ev) => { ev.stopPropagation(); sheetsMenu.hidden = true; addSheet(); });
+    sheetsMenu.appendChild(add);
+  }
+}
+const SHEET_ICONS = { check: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\" /></svg>", pencil: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\" /><path d=\"m15 5 4 4\" /></svg>", trash: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M10 11v6\" /><path d=\"M14 11v6\" /><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\" /><path d=\"M3 6h18\" /><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\" /></svg>", plus: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h14\" /><path d=\"M12 5v14\" /></svg>" };
+
+$('#btn-sheets').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  sheetsMenu.hidden = !sheetsMenu.hidden;
+  if (!sheetsMenu.hidden) { $('#menu').hidden = true; $('#users-list').hidden = true; renderSheets(); }
+});
+window.addEventListener('pointerdown', (ev) => { if (!sheetsMenu.hidden && !ev.target.closest('#sheets-menu, #btn-sheets')) sheetsMenu.hidden = true; });
+window.addEventListener('keydown', (ev) => {
+  if (editing || /^(INPUT|TEXTAREA)$/.test(ev.target.tagName) || ev.target.closest('dialog')) return;
+  if (ev.key === 'PageDown' || ev.key === 'PageUp') {
+    const i = state.sheets.findIndex((f) => f.id === state.sheet);
+    const j = ev.key === 'PageDown' ? i + 1 : i - 1;
+    if (state.sheets[j]) { ev.preventDefault(); switchSheet(state.sheets[j].id); }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -2129,6 +2274,7 @@ function applyAccess() {
   }
   lastWriteState = can;
   renderUsers();
+  renderSheets();
 }
 
 // ---------------------------------------------------------------------------
@@ -2160,6 +2306,8 @@ function updateRemoteCursor(peerId, msg) {
   el.querySelector('span').style.background = user.color;
   el.dataset.x = msg.x;
   el.dataset.y = msg.y;
+  el.dataset.sheet = msg.sheet || DEFAULT_SHEET;
+  el.hidden = el.dataset.sheet !== state.sheet;
   el.style.transform = `translate(${msg.x}px, ${msg.y}px) scale(${1 / state.view.scale})`;
 }
 
@@ -2444,8 +2592,8 @@ function base64ToBuf(b64) {
 }
 
 async function saveSession() {
-  const objects = sortedObjects();
-  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), preamble: state.preamble, access: state.access, objects, files: {} };
+  const objects = [...state.objects.values()];
+  const data = { app: 'tableaublanc', version: 1, room: ROOM, savedAt: new Date().toISOString(), preamble: state.preamble, access: state.access, sheets: state.sheets, objects, files: {} };
   for (const o of objects) {
     if (isRect(o) && files.has(o.fileId) && !data.files[o.fileId]) data.files[o.fileId] = bufToBase64(files.get(o.fileId));
   }
@@ -2460,6 +2608,11 @@ async function openSession(file) {
     if (!files.has(id)) storeFile(id, base64ToBuf(b64));
   }
   if (data.access && data.access.leader && !state.access) setAccess(data.access);
+  if (Array.isArray(data.sheets) && data.sheets.length) {
+    const known = new Set(state.sheets.map((f) => f.id));
+    const extra = data.sheets.filter((f) => f && f.id && !known.has(f.id));
+    if (extra.length) setSheets([...state.sheets, ...extra]);
+  }
   const objs = data.objects.filter((o) => o && typeof o.id === 'string' && !state.objects.has(o.id));
   if (objs.length) applyOp({ t: 'add', objs });
   let note = '';
@@ -2558,7 +2711,9 @@ async function exportPdf() {
   setHint('Préparation du PDF…');
   const { PDFDocument, rgb, LineCapStyle, degrees } = await import('./vendor/pdf-lib.esm.min.js');
   const out = await PDFDocument.create();
-  const all = sortedObjects();
+  for (const sheet of state.sheets) {
+  const all = sortedObjects(sheet.id);
+  if (!all.length && state.sheets.length > 1) continue;
   const pages = all.filter((o) => o.type === 'pdf').sort((a, b) => (a.y - b.y) || (a.x - b.x));
   const strokes = all.filter((o) => o.type === 'stroke');
   const texts = all.filter((o) => o.type === 'text');
@@ -2664,7 +2819,7 @@ async function exportPdf() {
   }
 
   const rest = [...images, ...strokes, ...texts].filter((o) => !placed.has(o.id)).sort((a, b) => zOf(a) - zOf(b));
-  if (rest.length || !out.getPageCount()) {
+  if (rest.length || (!out.getPageCount() && sheet === state.sheets[state.sheets.length - 1])) {
     const b = unionBounds(rest) || { x: 0, y: 0, w: 800, h: 600 };
     const pad = 40;
     const scale = Math.min(1, 14000 / (b.w + 2 * pad), 14000 / (b.h + 2 * pad));
@@ -2672,6 +2827,7 @@ async function exportPdf() {
     const toPt = (wx, wy) => [(wx - b.x + pad) * scale, page.getHeight() - (wy - b.y + pad) * scale];
     await drawOn(page, rest, toPt, scale, 0);
   }
+  } // fin des feuilles
 
   const bytes = await out.save();
   download(new Blob([bytes], { type: 'application/pdf' }), `tableau-${ROOM}-${stamp()}.pdf`);
@@ -2771,18 +2927,11 @@ $('#btn-zoom-in').addEventListener('click', () => zoomAt(canvas.clientWidth / 2,
 $('#btn-zoom-out').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 0.8));
 $('#btn-zoom-fit').addEventListener('click', fitView);
 $('#btn-clear').addEventListener('click', () => {
-  if (!state.objects.size) return;
   if (!iCanWrite()) { warn('Lecture seule : le leader ne vous a pas autorisé à écrire'); return; }
-  if (!confirm('Effacer tout le tableau pour tout le monde ?')) return;
-  const objs = [...state.objects.values()];
-  for (const obj of objs) state.tombstones.set(obj.id, Date.now());
-  state.objects.clear();
-  overlay.replaceChildren();
-  setSelection([]);
-  broadcast('op', { t: 'clear' });
-  recordOp({ t: 'remove', objs });
-  scheduleSave();
-  requestRender();
+  const objs = sortedObjects();
+  if (!objs.length) return;
+  if (!confirm(state.sheets.length > 1 ? 'Effacer toute cette feuille pour tout le monde ?' : 'Effacer tout le tableau pour tout le monde ?')) return;
+  applyOp({ t: 'remove', objs });
 });
 $('#btn-share').addEventListener('click', async () => {
   const url = location.href;
@@ -2886,7 +3035,7 @@ window.addEventListener('keydown', (ev) => {
   const mod = ev.ctrlKey || ev.metaKey;
   if (mod && ev.key.toLowerCase() === 'z') { ev.preventDefault(); ev.shiftKey ? redo() : undo(); return; }
   if (mod && ev.key.toLowerCase() === 'y') { ev.preventDefault(); redo(); return; }
-  if (mod && ev.key.toLowerCase() === 'a') { ev.preventDefault(); if (state.tool !== 'lasso') setTool('select'); setSelection([...state.objects.keys()]); return; }
+  if (mod && ev.key.toLowerCase() === 'a') { ev.preventDefault(); if (state.tool !== 'lasso') setTool('select'); setSelection(sortedObjects().map((o) => o.id)); return; }
   if (mod && ev.key.toLowerCase() === 'd') { ev.preventDefault(); duplicateSelection(); return; }
   if (mod) return;
   switch (ev.key) {
@@ -2940,6 +3089,7 @@ resize();
 setTool('pen');
 updateUndoButtons();
 renderUsers();
+renderSheets();
 connect();
 loadLocal().then(() => fitView());
 
