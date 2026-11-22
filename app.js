@@ -2152,8 +2152,7 @@ function renderUsers() {
   ul.appendChild(head);
 
   const rows = [{ ...list[0], uid: me.uid }, ...peerIds().map((p) => ({ ...userOf(p), uid: uidOfPeer(p) })), ...relayOnlyPeers().map((rid) => ({ ...userOf('r:' + rid), uid: relay.peers.get(rid)?.uid || '' }))];
-  const alone = rows.length === 1 && isLeader();
-  for (const u of alone ? [] : rows) {
+  for (const u of rows) {
     const li = document.createElement('li');
     li.className = 'person';
     const av = document.createElement('span');
@@ -2178,6 +2177,14 @@ function renderUsers() {
     li.append(av, text);
     const actions = document.createElement('span');
     actions.className = 'actions';
+    if (u.self) {
+      const r = document.createElement('button');
+      r.className = 'badge toggle';
+      r.title = 'Changer de nom';
+      r.innerHTML = ICONS.userPen;
+      r.addEventListener('click', (ev) => { ev.stopPropagation(); renameMe(); });
+      actions.appendChild(r);
+    }
     if (isLead) {
       actions.insertAdjacentHTML('beforeend', '<span class="badge leader" title="Leader de la salle">' + ICONS.crown + '</span>');
     } else if (isLeader() && u.uid) {
@@ -2234,6 +2241,7 @@ function renderUsers() {
   ul.appendChild(foot);
 }
 const ICONS = {
+  userPen: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M11.5 15H7a4 4 0 0 0-4 4v2\" /><path d=\"M21.378 16.626a1 1 0 0 0-3.004-3.004l-4.01 4.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z\" /><circle cx=\"10\" cy=\"7\" r=\"4\" /></svg>",
   crown: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z\" /><path d=\"M5 21h14\" /></svg>",
   eye: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\" /><circle cx=\"12\" cy=\"12\" r=\"3\" /></svg>",
   pencil: "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\" /><path d=\"m15 5 4 4\" /></svg>",
@@ -2752,16 +2760,17 @@ $('#btn-share').addEventListener('click', async () => {
   }
   setTimeout(() => ($('#btn-share span').textContent = 'Partager'), 1800);
 });
-$('#btn-name').addEventListener('click', () => {
+function renameMe() {
   const name = prompt('Votre nom :', me.name);
   if (name && name.trim()) {
     me.name = name.trim().slice(0, 24);
     localStorage.setItem('wb-name', me.name);
-    profile?.set({ name: me.name, color: me.color });
+    profile?.set({ name: me.name, color: me.color, uid: me.uid });
     relayPresence();
     renderUsers();
   }
-});
+}
+$('#btn-name').addEventListener('click', renameMe);
 
 const menu = $('#menu');
 $('#btn-menu').addEventListener('click', (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; });
