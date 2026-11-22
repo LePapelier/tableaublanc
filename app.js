@@ -1973,7 +1973,7 @@ function cancelCurrentStroke() {
 }
 
 function eraseAt(wx, wy, d) {
-  const radius = Math.max(d.touch ? 14 : 8, state.width * 2) / state.view.scale;
+  const radius = (d.touch ? 14 : 8) / state.view.scale;
   const hit = [];
   for (const obj of state.objects.values()) {
     if (obj.type === 'stroke' && strokeHit(obj, wx, wy, radius)) hit.push(obj);
@@ -2653,7 +2653,7 @@ function setTool(tool) {
   document.querySelectorAll('.tool[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
   canvas.style.cursor = { hand: 'grab', select: 'default', text: 'text', eraser: 'cell' }[tool] || 'crosshair';
   const isSelectTool = tool === 'select' || tool === 'lasso';
-  $('#sizes').hidden = !(tool === 'pen' || tool === 'marker' || tool === 'eraser');
+  $('#sizes').hidden = !(tool === 'pen' || tool === 'marker');
   $('#font-sizes').hidden = tool !== 'text';
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
   if (!isSelectTool) setSelection([]);
