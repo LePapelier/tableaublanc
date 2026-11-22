@@ -105,7 +105,6 @@ const cursorsEl = $('#cursors');
 const selectionEl = $('#selection');
 const selbar = $('#selbar');
 const marqueeEl = $('#marquee');
-const effectsMenu = $('#effects-menu');
 const editor = $('#editor');
 const stage = $('#stage');
 const hint = $('#hint');
@@ -2949,8 +2948,7 @@ function setTool(tool) {
   canvas.style.cursor = { hand: 'grab', select: 'default', text: 'text', eraser: 'cell' }[tool] || 'crosshair';
   const isSelectTool = tool === 'select' || tool === 'lasso';
   $('#sizes').hidden = !(tool === 'pen' || tool === 'marker');
-  $('#btn-effect').hidden = tool !== 'pen';
-  if (tool !== 'pen') effectsMenu.hidden = true;
+  $('#effects').hidden = tool !== 'pen';
   $('#font-sizes').hidden = tool !== 'text';
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
   if (!isSelectTool) setSelection([]);
@@ -2982,7 +2980,6 @@ for (const c of PALETTE) {
 }
 function setColor(c) {
   state.color = c;
-  if (!effectsMenu.hidden) renderEffects();
   colorsEl.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s.dataset.color === c));
   const objs = selectedObjects().filter((o) => !isRect(o));
   if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { color: o.color }, after: { color: c } })) });
@@ -3014,40 +3011,25 @@ buildSizes($('#sizes'), STROKE_SIZES, (v) => {
   d.style.width = d.style.height = px + 'px';
   return d;
 }, (v) => { state.width = v; markActive($('#sizes'), v); });
-// Effets de crayon : bouton dans les options, liste avec un aperçu dessiné de chaque effet.
+// Effets de crayon : trois boutons d'icône dans la rangée des options (style de trait).
+const EFFECT_ICONS = {
+  plain: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/></svg>',
+  neon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16" stroke-width="7" opacity=".28"/><path d="M4 12h16"/></svg>',
+  dashed: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h3.5M10.25 12h3.5M16.5 12h3.5"/></svg>',
+};
 function renderEffects() {
-  $('#btn-effect').classList.toggle('active', state.effect !== 'plain');
-  $('#btn-effect').title = 'Effet du crayon : ' + (EFFECTS.find((e) => e.id === state.effect)?.label || 'Normal');
-  if (effectsMenu.hidden) return;
-  effectsMenu.replaceChildren();
-  const pts = [];
-  for (let i = 0; i <= 24; i++) pts.push(10 + i * 4.4, 15 + Math.sin(i / 3.2) * 7);
+  const box = $('#effects');
+  box.replaceChildren();
   for (const e of EFFECTS) {
     const b = document.createElement('button');
-    b.className = 'effect' + (e.id === state.effect ? ' on' : '');
-    const c = document.createElement('canvas');
-    c.width = 240; c.height = 60; c.style.width = '120px'; c.style.height = '30px';
-    const g = c.getContext('2d');
-    g.scale(2, 2);
-    drawStrokeOn(g, { points: pts, color: state.color, width: 3.2, effect: e.id }, 2);
-    const label = document.createElement('span');
-    label.textContent = e.label;
-    b.append(c, label);
-    b.addEventListener('click', (ev) => { ev.stopPropagation(); state.effect = e.id; effectsMenu.hidden = true; renderEffects(); });
-    effectsMenu.appendChild(b);
+    b.className = 'size fx' + (e.id === state.effect ? ' active' : '');
+    b.dataset.effect = e.id;
+    b.title = e.label;
+    b.innerHTML = EFFECT_ICONS[e.id] || '';
+    b.addEventListener('click', () => { state.effect = e.id; renderEffects(); });
+    box.appendChild(b);
   }
-  const r = $('#btn-effect').getBoundingClientRect();
-  const compact = matchMedia('(max-width: 760px), (max-height: 520px)').matches;
-  effectsMenu.style.left = (compact ? clamp(r.left + r.width / 2 - 90, 8, window.innerWidth - 188) : r.right + 12) + 'px';
-  effectsMenu.style.top = compact ? '' : clamp(r.top - 8, 8, window.innerHeight - effectsMenu.offsetHeight - 8) + 'px';
-  effectsMenu.style.bottom = compact ? (window.innerHeight - r.top + 10) + 'px' : '';
 }
-$('#btn-effect').addEventListener('click', (ev) => {
-  ev.stopPropagation();
-  effectsMenu.hidden = !effectsMenu.hidden;
-  renderEffects();
-});
-window.addEventListener('pointerdown', (ev) => { if (!effectsMenu.hidden && !ev.target.closest('#effects-menu, #btn-effect')) effectsMenu.hidden = true; });
 renderEffects();
 
 buildSizes($('#font-sizes'), FONT_SIZES, (v) => {

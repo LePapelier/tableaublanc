@@ -678,26 +678,12 @@ button:focus-visible, label.file:focus-visible, .swatch:focus-visible, .size:foc
 }
 
 /* ----- Effets de crayon ----- */
-.effect-btn { margin-top: 2px; }
-.effect-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-#effects-menu {
-  pointer-events: auto;
-  position: fixed;
-  width: 180px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  background: var(--panel);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-  z-index: 6;
+#effects { display: flex; gap: 2px; justify-content: center; }
+#effects .fx { width: 28px; height: 28px; }
+#effects .fx svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+#effects .fx.active { background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 760px), (max-height: 520px) {
+  #options .row2 { display: flex; align-items: center; gap: 14px; }
+  #effects { gap: 6px; }
+  #effects .fx { width: 36px; height: 32px; }
 }
-#effects-menu .effect { height: 46px; justify-content: flex-start; gap: 10px; padding: 4px 8px; border-radius: 9px; font-size: 13px; }
-#effects-menu .effect canvas { width: 120px; height: 30px; border-radius: 6px; background: white; border: 1px solid var(--border); flex: none; }
-#effects-menu .effect span { display: none; }
-#effects-menu .effect.on { background: var(--accent-soft); }
-#effects-menu .effect.on canvas { border-color: var(--accent); }
