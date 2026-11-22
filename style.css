@@ -602,7 +602,8 @@ body.readonly #board { cursor: not-allowed; }
   box-shadow: var(--shadow);
   z-index: 7;
 }
-#ctxmenu button { justify-content: flex-start; height: 38px; padding: 0 12px; font-size: 14px; gap: 10px; }
+#ctxmenu { overflow-y: auto; overscroll-behavior: contain; }
+#ctxmenu button { flex: none; justify-content: flex-start; height: 38px; padding: 0 12px; font-size: 14px; gap: 10px; }
 #ctxmenu button svg { width: 17px; height: 17px; opacity: .8; }
 #ctxmenu .sep { height: 1px; width: auto; margin: 4px 8px; background: var(--border); }
 

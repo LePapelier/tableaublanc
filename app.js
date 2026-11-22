@@ -1602,10 +1602,32 @@ function openContextMenu(x, y) {
     ctxmenu.appendChild(b);
   }
   ctxmenu.hidden = false;
+  ctxmenu.style.maxHeight = '';
   selbar.hidden = true; // le menu reprend déjà Dupliquer / Supprimer
   const w = ctxmenu.offsetWidth, h = ctxmenu.offsetHeight;
-  ctxmenu.style.left = clamp(x, 8, window.innerWidth - w - 8) + 'px';
-  ctxmenu.style.top = clamp(y, 8, window.innerHeight - h - 8) + 'px';
+  const W = window.innerWidth, H = window.innerHeight, gap = 12;
+  // À côté de la sélection, sans la recouvrir : droite, gauche, dessous, dessus ; sinon près du pointeur.
+  const b = selectionBounds();
+  let left = x, top = y;
+  if (b) {
+    const [sx, sy] = toScreen(b.x, b.y);
+    const sw = b.w * state.view.scale, sh = b.h * state.view.scale;
+    const fitsV = (t) => clamp(t, 8, H - h - 8);
+    const below = H - 8 - (sy + sh + gap), above = sy - gap - 70;
+    if (sx + sw + gap + w <= W - 8) { left = sx + sw + gap; top = fitsV(y - 20); }
+    else if (sx - gap - w >= 8) { left = sx - gap - w; top = fitsV(y - 20); }
+    else if (below >= h) { left = clamp(x - w / 2, 8, W - w - 8); top = sy + sh + gap; }
+    else if (above >= h) { left = clamp(x - w / 2, 8, W - w - 8); top = sy - gap - h; }
+    else {
+      // Pas la place : du côté le plus dégagé, avec défilement interne.
+      left = clamp(x - w / 2, 8, W - w - 8);
+      if (below >= above) { top = sy + sh + gap; ctxmenu.style.maxHeight = Math.max(120, below) + 'px'; }
+      else { ctxmenu.style.maxHeight = Math.max(120, above) + 'px'; top = Math.max(70, sy - gap - Math.min(h, above)); }
+    }
+  }
+  const hEff = Math.min(h, parseFloat(ctxmenu.style.maxHeight) || h); // hauteur réelle si le menu défile
+  ctxmenu.style.left = clamp(left, 8, W - w - 8) + 'px';
+  ctxmenu.style.top = clamp(top, 8, H - hEff - 8) + 'px';
 }
 function closeContextMenu() {
   if (ctxmenu.hidden) return;
