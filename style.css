@@ -441,6 +441,7 @@ body.readonly #board { cursor: not-allowed; }
   grid-template-columns: repeat(2, 1fr);
   gap: 4px;
 }
+#options .row2 { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .size {
   width: 30px;
   height: 30px;
