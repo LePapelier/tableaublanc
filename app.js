@@ -221,15 +221,7 @@ function connect() {
   };
   profile = room.makeUserState('profile', { name: 'Anonyme', color: '#9ca3af', uid: '' });
   profile.set({ name: me.name, color: me.color, uid: me.uid }).catch(() => {});
-  accessState = room.makeState('access', null, {
-    // Seul le leader en place peut modifier les droits (ou n'importe qui tant qu'il n'y en a pas).
-    validate: (next, ctx) => {
-      const cur = state.access;
-      if (!cur || !cur.leader || ctx.peerId === me.id) return true;
-      const uid = uidOfPeer(ctx.peerId);
-      return !uid || uid === cur.leader;
-    },
-  });
+  accessState = room.makeState('access', null);
   accessState.onChange((value) => {
     if (value && value.leader && JSON.stringify(value) !== JSON.stringify(state.access)) setAccess(value, { broadcast: false });
   });
@@ -244,8 +236,7 @@ function connect() {
   room.getSelf().then((self) => { me.id = self.peerId; renderUsers(); relayPresence(); });
   room.ready.then(() => {
     net.relay = 'ready'; renderNetStatus();
-    // Salle sans leader connu après quelques secondes : le premier arrivé prend le rôle.
-    setTimeout(() => { if (!state.access && !peerIds().length && !relay.peers.size) claimLeader(); }, 2500);
+
   })
     .catch((err) => { net.relay = 'error'; net.lastError = err.message; renderNetStatus(); setStatus('Relais de mise en relation injoignable : ' + err.message, 'warn'); });
   room.onError((err) => {
@@ -565,12 +556,9 @@ function relayHandle(msg, env) {
       if (msg.p && msg.p.points) state.drafts.set(key, msg.p); else state.drafts.delete(key);
       requestRender();
       break;
-    case 'access': {
-      const cur = state.access;
-      const fromUid = relay.peers.get(from)?.uid;
-      if (msg.p && msg.p.leader && (!cur || !cur.leader || fromUid === cur.leader)) setAccess(msg.p, { broadcast: false });
+    case 'access':
+      if (msg.p && msg.p.leader) setAccess(msg.p, { broadcast: false });
       break;
-    }
     case 'cursor': updateRemoteCursor(key, msg.p); break;
     case 'sync-req':
       relaySend({ k: 'sync', p: { objects: [...state.objects.values()], tombstones: [...state.tombstones], preamble: state.preamble, access: state.access } }, from);
@@ -2066,9 +2054,34 @@ function setAccess(access, { broadcast = true, save = true } = {}) {
   applyAccess();
 }
 function claimLeader() {
-  setAccess({ leader: me.uid, mode: 'open', writers: {}, names: { [me.uid]: me.name } });
-  flash('Vous êtes le leader de la salle');
+  const a = state.access;
+  setAccess({ ...(a || { mode: 'open', writers: {} }), leader: me.uid, names: { ...(a?.names || {}), [me.uid]: me.name } });
 }
+
+// Leader attribué automatiquement : s'il n'y en a pas, ou s'il est absent depuis un moment, le participant
+// présent dont l'identifiant est le plus petit prend le rôle. Règle déterministe : tous désignent la même personne.
+const electionStart = Date.now();
+let leaderMissingSince = 0;
+function presentUids() {
+  const set = new Set([me.uid]);
+  for (const p of peerIds()) { const u = uidOfPeer(p); if (u) set.add(u); }
+  for (const p of relay.peers.values()) if (p.uid) set.add(p.uid);
+  return set;
+}
+function electLeader() {
+  const a = state.access;
+  const present = presentUids();
+  if (a && a.leader && present.has(a.leader)) { leaderMissingSince = 0; return; }
+  const unknown = peerIds().some((p) => !uidOfPeer(p)) || [...relay.peers.values()].some((p) => !p.uid);
+  if (unknown && Date.now() - electionStart < 20000) return; // laisser les profils arriver
+  if (a && a.leader) {
+    if (!leaderMissingSince) { leaderMissingSince = Date.now(); return; }
+    if (Date.now() - leaderMissingSince < 10000) return; // délai de grâce (onglet gelé, coupure brève)
+  } else if (Date.now() - electionStart < 2500) return;
+  const candidate = [...present].sort()[0];
+  if (candidate === me.uid) claimLeader();
+}
+setInterval(electLeader, 3000);
 function leaderUpdate(patch) {
   if (!isLeader()) return;
   const a = state.access;
@@ -2223,21 +2236,9 @@ function renderUsers() {
     foot.appendChild(b);
   } else if (a && a.leader) {
     const leaderName = a.names?.[a.leader] || 'un autre participant';
-    foot.innerHTML = `<span class="label">Leader</span><span class="muted">${escapeHtml(leaderName)}${a.mode === 'restricted' ? '' : ' · écriture libre'}</span>`;
-    if (!leaderPresent()) {
-      const b = document.createElement('button');
-      b.className = 'text wide';
-      b.innerHTML = ICONS.crown + '<span>Prendre la main</span>';
-      b.title = 'Le leader est absent : devenir leader';
-      b.addEventListener('click', (ev) => { ev.stopPropagation(); claimLeader(); });
-      foot.appendChild(b);
-    }
+    foot.innerHTML = `<span class="label">Leader</span><span class="muted">${escapeHtml(leaderName)}${leaderPresent() ? '' : ' (absent)'}${a.mode === 'restricted' ? '' : ' · écriture libre'}</span>`;
   } else {
-    const b = document.createElement('button');
-    b.className = 'text wide';
-    b.innerHTML = ICONS.crown + '<span>Devenir leader</span>';
-    b.addEventListener('click', (ev) => { ev.stopPropagation(); claimLeader(); });
-    foot.appendChild(b);
+    foot.innerHTML = '<span class="muted">Attribution du leader…</span>';
   }
   ul.appendChild(foot);
 }
