@@ -676,3 +676,28 @@ button:focus-visible, label.file:focus-visible, .swatch:focus-visible, .size:foc
   #btn-sheets #sheet-count { font-size: 13px; color: var(--text); }
   #sheets-menu { left: 12px; transform: none; }
 }
+
+/* ----- Effets de crayon ----- */
+.effect-btn { margin-top: 2px; }
+.effect-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#effects-menu {
+  pointer-events: auto;
+  position: fixed;
+  width: 180px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--panel);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 6;
+}
+#effects-menu .effect { height: 46px; justify-content: flex-start; gap: 10px; padding: 4px 8px; border-radius: 9px; font-size: 13px; }
+#effects-menu .effect canvas { width: 120px; height: 30px; border-radius: 6px; background: white; border: 1px solid var(--border); flex: none; }
+#effects-menu .effect span { display: none; }
+#effects-menu .effect.on { background: var(--accent-soft); }
+#effects-menu .effect.on canvas { border-color: var(--accent); }

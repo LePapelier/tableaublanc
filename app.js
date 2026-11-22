@@ -83,6 +83,7 @@ const state = {
   tool: 'pen',
   color: PALETTE[0],
   width: 4,
+  effect: 'plain', // rendu du crayon : plain | neon | calligraphy | dashed | rainbow
   fontSize: 24,
   selected: new Set(), // ids sélectionnés
   preamble: '', // préambule LaTeX partagé (macros)
@@ -104,6 +105,7 @@ const cursorsEl = $('#cursors');
 const selectionEl = $('#selection');
 const selbar = $('#selbar');
 const marqueeEl = $('#marquee');
+const effectsMenu = $('#effects-menu');
 const editor = $('#editor');
 const stage = $('#stage');
 const hint = $('#hint');
@@ -979,33 +981,117 @@ function drawGrid(W, H) {
 }
 
 function drawStroke(obj) {
-  const p = obj.points;
-  if (!p || p.length < 2) return;
-  ctx.globalAlpha = obj.opacity ?? 1;
-  ctx.strokeStyle = obj.color;
-  ctx.lineWidth = obj.width;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  if (p.length === 2) {
-    ctx.arc(p[0], p[1], obj.width / 2, 0, Math.PI * 2);
-    ctx.fillStyle = obj.color;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    return;
-  }
-  ctx.moveTo(p[0], p[1]);
+  drawStrokeOn(ctx, obj, state.view.scale * dpr);
+}
+
+// Effets de crayon disponibles (l'identifiant est enregistré dans le trait).
+const EFFECTS = [
+  { id: 'plain', label: 'Normal' },
+  { id: 'neon', label: 'Néon' },
+  { id: 'calligraphy', label: 'Calligraphie' },
+  { id: 'dashed', label: 'Pointillé' },
+  { id: 'rainbow', label: 'Arc-en-ciel' },
+];
+
+function tracePath(g, p) {
+  g.beginPath();
+  g.moveTo(p[0], p[1]);
   if (p.length === 4) {
-    ctx.lineTo(p[2], p[3]);
+    g.lineTo(p[2], p[3]);
   } else {
     for (let i = 2; i + 3 < p.length; i += 2) {
       const mx = (p[i] + p[i + 2]) / 2, my = (p[i + 1] + p[i + 3]) / 2;
-      ctx.quadraticCurveTo(p[i], p[i + 1], mx, my);
+      g.quadraticCurveTo(p[i], p[i + 1], mx, my);
     }
-    ctx.lineTo(p[p.length - 2], p[p.length - 1]);
+    g.lineTo(p[p.length - 2], p[p.length - 1]);
   }
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+}
+
+function lighten(hex, amount) {
+  const [r, g, b] = hexToRgb01(hex);
+  const f = (v) => Math.round((v + (1 - v) * amount) * 255);
+  return `rgb(${f(r)}, ${f(g)}, ${f(b)})`;
+}
+
+// Largeur de plume selon la direction du segment (biseau à 45°).
+function nibWidth(width, dx, dy) {
+  const a = Math.atan2(dy, dx);
+  return width * (0.25 + 0.95 * Math.abs(Math.sin(a - Math.PI / 4)));
+}
+
+// Dessine un trait sur un contexte quelconque ; pxScale = pixels d'écran par unité monde (pour le halo néon).
+function drawStrokeOn(g, obj, pxScale = 1) {
+  const p = obj.points;
+  if (!p || p.length < 2) return;
+  const w = obj.width;
+  g.save();
+  g.globalAlpha = obj.opacity ?? 1;
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  if (p.length === 2) {
+    g.fillStyle = obj.color;
+    g.beginPath();
+    g.arc(p[0], p[1], w / 2, 0, Math.PI * 2);
+    g.fill();
+    g.restore();
+    return;
+  }
+  switch (obj.effect) {
+    case 'neon': {
+      tracePath(g, p);
+      g.strokeStyle = obj.color;
+      g.shadowColor = obj.color;
+      g.shadowBlur = Math.max(4, w * 2.5 * pxScale);
+      g.lineWidth = w;
+      g.stroke();
+      g.stroke();
+      g.shadowBlur = 0;
+      g.strokeStyle = lighten(obj.color, 0.75);
+      g.lineWidth = Math.max(0.6, w * 0.45);
+      g.stroke();
+      break;
+    }
+    case 'calligraphy': {
+      g.strokeStyle = obj.color;
+      g.lineCap = 'round';
+      for (let i = 0; i + 3 < p.length; i += 2) {
+        const dx = p[i + 2] - p[i], dy = p[i + 3] - p[i + 1];
+        g.lineWidth = nibWidth(w, dx, dy);
+        g.beginPath();
+        g.moveTo(p[i], p[i + 1]);
+        g.lineTo(p[i + 2], p[i + 3]);
+        g.stroke();
+      }
+      break;
+    }
+    case 'dashed': {
+      tracePath(g, p);
+      g.strokeStyle = obj.color;
+      g.lineWidth = w;
+      g.lineCap = 'butt';
+      g.setLineDash([w * 2, w * 1.6]);
+      g.stroke();
+      break;
+    }
+    case 'rainbow': {
+      const n = (p.length - 2) / 2;
+      g.lineWidth = w;
+      for (let i = 0; i + 3 < p.length; i += 2) {
+        g.strokeStyle = `hsl(${Math.round(((i / 2) / Math.max(1, n)) * 360)} 90% 55%)`;
+        g.beginPath();
+        g.moveTo(p[i], p[i + 1]);
+        g.lineTo(p[i + 2], p[i + 3]);
+        g.stroke();
+      }
+      break;
+    }
+    default:
+      tracePath(g, p);
+      g.strokeStyle = obj.color;
+      g.lineWidth = w;
+      g.stroke();
+  }
+  g.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -1762,6 +1848,7 @@ canvas.addEventListener('pointerdown', (ev) => {
       id: uid(), type: 'stroke', sheet: state.sheet, points: [wx, wy], color: state.color,
       width: tool === 'marker' ? state.width * 4 : state.width,
       opacity: tool === 'marker' ? 0.35 : 1, ts: Date.now(),
+      ...(tool === 'pen' && state.effect !== 'plain' ? { effect: state.effect } : {}),
     };
     drag = { kind: 'draw' };
     requestRender();
@@ -2767,7 +2854,28 @@ async function exportPdf() {
           const [x, y] = toPt(p[i], p[i + 1]);
           d += (i ? ' L ' : 'M ') + x.toFixed(2) + ' ' + (-y).toFixed(2);
         }
-        page.drawSvgPath(d, { x: 0, y: 0, borderColor: rgb(r, g, b), borderWidth: o.width * k, borderOpacity: o.opacity ?? 1, borderLineCap: LineCapStyle.Round });
+        const segment = (i) => { const [x1, y1] = toPt(p[i], p[i + 1]); const [x2, y2] = toPt(p[i + 2], p[i + 3]); return `M ${x1.toFixed(2)} ${(-y1).toFixed(2)} L ${x2.toFixed(2)} ${(-y2).toFixed(2)}`; };
+        const base = { x: 0, y: 0, borderLineCap: LineCapStyle.Round, borderOpacity: o.opacity ?? 1 };
+        if (o.effect === 'neon') {
+          page.drawSvgPath(d, { ...base, borderColor: rgb(r, g, b), borderWidth: o.width * k * 3, borderOpacity: 0.18 });
+          page.drawSvgPath(d, { ...base, borderColor: rgb(r, g, b), borderWidth: o.width * k * 1.6, borderOpacity: 0.35 });
+          page.drawSvgPath(d, { ...base, borderColor: rgb(r, g, b), borderWidth: o.width * k });
+          const [lr, lg, lb] = [r, g, b].map((v) => v + (1 - v) * 0.75);
+          page.drawSvgPath(d, { ...base, borderColor: rgb(lr, lg, lb), borderWidth: o.width * k * 0.45 });
+        } else if (o.effect === 'calligraphy') {
+          for (let i = 0; i + 3 < p.length; i += 2) page.drawSvgPath(segment(i), { ...base, borderColor: rgb(r, g, b), borderWidth: nibWidth(o.width, p[i + 2] - p[i], p[i + 3] - p[i + 1]) * k });
+        } else if (o.effect === 'dashed') {
+          page.drawSvgPath(d, { ...base, borderColor: rgb(r, g, b), borderWidth: o.width * k, borderLineCap: LineCapStyle.Butt, borderDashArray: [o.width * k * 2, o.width * k * 1.6] });
+        } else if (o.effect === 'rainbow') {
+          const n = (p.length - 2) / 2;
+          for (let i = 0; i + 3 < p.length; i += 2) {
+            const h = ((i / 2) / Math.max(1, n)) * 6, c1 = 1, x = 1 - Math.abs((h % 2) - 1);
+            const [rr, gg, bb] = h < 1 ? [c1, x, 0] : h < 2 ? [x, c1, 0] : h < 3 ? [0, c1, x] : h < 4 ? [0, x, c1] : h < 5 ? [x, 0, c1] : [c1, 0, x];
+            page.drawSvgPath(segment(i), { ...base, borderColor: rgb(rr * 0.9 + 0.05, gg * 0.9 + 0.05, bb * 0.9 + 0.05), borderWidth: o.width * k });
+          }
+        } else {
+          page.drawSvgPath(d, { ...base, borderColor: rgb(r, g, b), borderWidth: o.width * k });
+        }
       } else if (o.type === 'text' || o.type === 'image') {
         const t = o.type === 'text' ? await textImage(o) : { img: await imageEmbed(o), w: o.w, h: o.h };
         if (!t || !t.img) continue;
@@ -2843,6 +2951,8 @@ function setTool(tool) {
   canvas.style.cursor = { hand: 'grab', select: 'default', text: 'text', eraser: 'cell' }[tool] || 'crosshair';
   const isSelectTool = tool === 'select' || tool === 'lasso';
   $('#sizes').hidden = !(tool === 'pen' || tool === 'marker');
+  $('#btn-effect').hidden = tool !== 'pen';
+  if (tool !== 'pen') effectsMenu.hidden = true;
   $('#font-sizes').hidden = tool !== 'text';
   $('#colors').hidden = tool === 'eraser' || tool === 'hand' || isSelectTool;
   if (!isSelectTool) setSelection([]);
@@ -2874,6 +2984,7 @@ for (const c of PALETTE) {
 }
 function setColor(c) {
   state.color = c;
+  if (!effectsMenu.hidden) renderEffects();
   colorsEl.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s.dataset.color === c));
   const objs = selectedObjects().filter((o) => !isRect(o));
   if (objs.length) applyOp({ t: 'patch', items: objs.map((o) => ({ id: o.id, before: { color: o.color }, after: { color: c } })) });
@@ -2905,6 +3016,42 @@ buildSizes($('#sizes'), STROKE_SIZES, (v) => {
   d.style.width = d.style.height = px + 'px';
   return d;
 }, (v) => { state.width = v; markActive($('#sizes'), v); });
+// Effets de crayon : bouton dans les options, liste avec un aperçu dessiné de chaque effet.
+function renderEffects() {
+  $('#btn-effect').classList.toggle('active', state.effect !== 'plain');
+  $('#btn-effect').title = 'Effet du crayon : ' + (EFFECTS.find((e) => e.id === state.effect)?.label || 'Normal');
+  if (effectsMenu.hidden) return;
+  effectsMenu.replaceChildren();
+  const pts = [];
+  for (let i = 0; i <= 24; i++) pts.push(10 + i * 4.4, 15 + Math.sin(i / 3.2) * 7);
+  for (const e of EFFECTS) {
+    const b = document.createElement('button');
+    b.className = 'effect' + (e.id === state.effect ? ' on' : '');
+    const c = document.createElement('canvas');
+    c.width = 240; c.height = 60; c.style.width = '120px'; c.style.height = '30px';
+    const g = c.getContext('2d');
+    g.scale(2, 2);
+    drawStrokeOn(g, { points: pts, color: state.color, width: 3.2, effect: e.id }, 2);
+    const label = document.createElement('span');
+    label.textContent = e.label;
+    b.append(c, label);
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); state.effect = e.id; effectsMenu.hidden = true; renderEffects(); });
+    effectsMenu.appendChild(b);
+  }
+  const r = $('#btn-effect').getBoundingClientRect();
+  const compact = matchMedia('(max-width: 760px), (max-height: 520px)').matches;
+  effectsMenu.style.left = (compact ? clamp(r.left + r.width / 2 - 90, 8, window.innerWidth - 188) : r.right + 12) + 'px';
+  effectsMenu.style.top = compact ? '' : clamp(r.top - 8, 8, window.innerHeight - effectsMenu.offsetHeight - 8) + 'px';
+  effectsMenu.style.bottom = compact ? (window.innerHeight - r.top + 10) + 'px' : '';
+}
+$('#btn-effect').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  effectsMenu.hidden = !effectsMenu.hidden;
+  renderEffects();
+});
+window.addEventListener('pointerdown', (ev) => { if (!effectsMenu.hidden && !ev.target.closest('#effects-menu, #btn-effect')) effectsMenu.hidden = true; });
+renderEffects();
+
 buildSizes($('#font-sizes'), FONT_SIZES, (v) => {
   const g = document.createElement('span');
   g.className = 'glyph';
