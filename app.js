@@ -2154,7 +2154,7 @@ function renderUsers() {
   const rows = [{ ...list[0], uid: me.uid }, ...peerIds().map((p) => ({ ...userOf(p), uid: uidOfPeer(p) })), ...relayOnlyPeers().map((rid) => ({ ...userOf('r:' + rid), uid: relay.peers.get(rid)?.uid || '' }))];
   for (const u of rows) {
     const li = document.createElement('li');
-    li.className = 'person';
+    li.className = 'person' + (u.self ? ' self' : '');
     const av = document.createElement('span');
     av.className = 'av';
     av.style.background = u.color;
@@ -2164,6 +2164,7 @@ function renderUsers() {
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = u.name + (u.self ? ' (moi)' : '');
+    if (u.self) { name.classList.add('editable'); name.title = 'Changer de nom'; name.addEventListener('click', (ev) => { ev.stopPropagation(); startNameEdit(); }); }
     const sub = document.createElement('span');
     sub.className = 'sub';
     const isLead = a && a.leader && u.uid === a.leader;
@@ -2182,7 +2183,7 @@ function renderUsers() {
       r.className = 'badge toggle';
       r.title = 'Changer de nom';
       r.innerHTML = ICONS.userPen;
-      r.addEventListener('click', (ev) => { ev.stopPropagation(); renameMe(); });
+      r.addEventListener('click', (ev) => { ev.stopPropagation(); startNameEdit(); });
       actions.appendChild(r);
     }
     if (isLead) {
@@ -2760,17 +2761,43 @@ $('#btn-share').addEventListener('click', async () => {
   }
   setTimeout(() => ($('#btn-share span').textContent = 'Partager'), 1800);
 });
-function renameMe() {
-  const name = prompt('Votre nom :', me.name);
-  if (name && name.trim()) {
-    me.name = name.trim().slice(0, 24);
-    localStorage.setItem('wb-name', me.name);
-    profile?.set({ name: me.name, color: me.color, uid: me.uid });
-    relayPresence();
-    renderUsers();
-  }
+function applyName(name) {
+  const clean = String(name || '').trim().slice(0, 24);
+  if (!clean || clean === me.name) { renderUsers(); return; }
+  me.name = clean;
+  localStorage.setItem('wb-name', me.name);
+  profile?.set({ name: me.name, color: me.color, uid: me.uid });
+  relayPresence();
+  renderUsers();
 }
-$('#btn-name').addEventListener('click', renameMe);
+// Saisie du nom directement dans la ligne du volet (pas de boîte système).
+function startNameEdit() {
+  const ul = $('#users-list');
+  ul.hidden = false;
+  const row = ul.querySelector('.person.self');
+  if (!row || row.querySelector('input')) return;
+  const nameEl = row.querySelector('.name');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'name-edit';
+  input.maxLength = 24;
+  input.value = me.name;
+  input.setAttribute('aria-label', 'Votre nom');
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => { if (done) return; done = true; if (commit) applyName(input.value); else renderUsers(); };
+  input.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+}
+function renameMe() { startNameEdit(); }
+$('#btn-name').addEventListener('click', (ev) => { ev.stopPropagation(); renameMe(); });
 
 const menu = $('#menu');
 $('#btn-menu').addEventListener('click', (ev) => { ev.stopPropagation(); menu.hidden = !menu.hidden; });
