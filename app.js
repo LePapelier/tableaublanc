@@ -986,8 +986,8 @@ function drawStroke(obj) {
 // Effets de crayon disponibles (l'identifiant est enregistré dans le trait).
 const EFFECTS = [
   { id: 'plain', label: 'Normal' },
-  { id: 'neon', label: 'Néon' },
   { id: 'dashed', label: 'Pointillé' },
+  { id: 'neon', label: 'Néon' },
 ];
 
 function tracePath(g, p) {
