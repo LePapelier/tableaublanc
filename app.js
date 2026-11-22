@@ -83,7 +83,7 @@ const state = {
   tool: 'pen',
   color: PALETTE[0],
   width: 4,
-  effect: 'plain', // rendu du crayon : plain | neon | calligraphy | dashed | rainbow
+  effect: 'plain', // rendu du crayon : plain | neon | dashed
   fontSize: 24,
   selected: new Set(), // ids sélectionnés
   preamble: '', // préambule LaTeX partagé (macros)
@@ -988,9 +988,7 @@ function drawStroke(obj) {
 const EFFECTS = [
   { id: 'plain', label: 'Normal' },
   { id: 'neon', label: 'Néon' },
-  { id: 'calligraphy', label: 'Calligraphie' },
   { id: 'dashed', label: 'Pointillé' },
-  { id: 'rainbow', label: 'Arc-en-ciel' },
 ];
 
 function tracePath(g, p) {

@@ -4,7 +4,7 @@ Un tableau blanc partagé pour dessiner à plusieurs, écrire des formules en La
 
 Site en ligne : <https://paul-laurent.fr>
 
-- **Dessin à plusieurs en temps réel** (crayon, surligneur, gomme), avec les traits en cours et les curseurs des autres participants. Le crayon a cinq rendus au choix : normal, néon, calligraphie, pointillé, arc-en-ciel.
+- **Dessin à plusieurs en temps réel** (crayon, surligneur, gomme), avec les traits en cours et les curseurs des autres participants. Le crayon a trois rendus au choix : normal, néon, pointillé.
 - **Texte et LaTeX** : écrivez du texte, entourez les formules de `$…$` (en ligne) ou `$$…$$` (bloc). Rendu avec KaTeX. Quatre tailles de trait et de texte prédéfinies.
 - **PDF et images** : importez un PDF ou une image (bouton, glisser-déposer, ou Ctrl+V pour une image du presse-papiers). Chaque page PDF est posée sur le tableau et vous pouvez **écrire par-dessus**, déplacer, redimensionner et tourner pages et images. Les fichiers sont envoyés directement aux autres navigateurs.
 - Canevas infini (déplacement, zoom), **sélection** d'un ou plusieurs éléments (clic, cadre rectangulaire ou **lasso à main levée**) pour les déplacer, les redimensionner par les coins, les **faire tourner** par la poignée du haut, les dupliquer ou les supprimer, annuler/rétablir.
